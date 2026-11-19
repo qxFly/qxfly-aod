@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 前景：三条左对齐的歌词短横（宽度递减、圆角），与关于页 AppMark 同一套比例。
+     数值与 AboutPage.AppMark 一一对应（108 视口）：
+       left = 29.4/108 = 0.2722
+       条高 = 7.6/108 = 0.0704（圆角 3.8）
+       tops = 35.2 / 50.2 / 65.2  ->  0.3259 / 0.4639 / 0.6019
+       widths = 49.5 / 40.8 / 32.1  ->  0.4583 / 0.3778 / 0.2972 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 第 1 行：宽 49.5 -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M33.2,35.2h41.9a3.8,3.8 0 0 1 0,7.6h-41.9a3.8,3.8 0 0 1 0,-7.6z" />
+
+    <!-- 第 2 行：宽 40.8 -->
+    <path
+        android:fillColor="#EBFFFFFF"
+        android:pathData="M33.2,50.2h33.2a3.8,3.8 0 0 1 0,7.6h-33.2a3.8,3.8 0 0 1 0,-7.6z" />
+
+    <!-- 第 3 行：宽 32.1 -->
+    <path
+        android:fillColor="#CCFFFFFF"
+        android:pathData="M33.2,65.2h24.5a3.8,3.8 0 0 1 0,7.6h-24.5a3.8,3.8 0 0 1 0,-7.6z" />
+</vector>

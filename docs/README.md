@@ -667,6 +667,30 @@ loadClass 监听器（`TARGET_DOZE_MACHINE`，与 DozeServicePluginImpl 同款�
 - 全流程实测：`-Clean` 全量构建成功（约 21s，8.71 MB，2 dex，489 个资源符号），
   签名证书与之前一致（可覆盖安装）。
 
+### 2026-11-19 第十七轮（关于页 Logo 与应用图标统一）
+
+1. **一套图形，两处渲染**：应用图标（`mipmap-anydpi-v26/ic_launcher.xml`
+   + `drawable/ic_launcher_background.xml` + `drawable/ic_launcher_foreground.xml`）
+   与关于页 `AboutPage.AppMark` 现在共用同一组数值：
+   - 底色：靛蓝 → 紫 → 玫红 对角渐变，色标 `#5B4BFF / #7C4DFF / #B65CF5 / #FF6FA5`
+     （偏移 0 / 0.34 / 0.68 / 1），左上角一层柔和高光；
+   - 前景：三条左对齐、宽度递减的白色圆角横条（歌词行），
+     108 视口下 `left 29.4 / 条高 7.6 / tops 35.2·50.2·65.2 / widths 49.5·40.8·32.1`，
+     不透明度 1.0 / 0.92 / 0.80。
+   - 之前两边数值其实不一致（vector 的条更窄、更靠右），这次按同一组
+     坐标重写，桌面图标与关于页肉眼基本重合。
+2. **比例微调**：条高 0.065→0.0704、宽度阶梯改为每级递减约 0.08，
+   整组在图标内垂直居中；视觉上比原来「窄、挤在左上」更饱满。
+3. **`android:roundIcon` 一并指向新图标**，`monochrome` 层复用前景（主题图标可用）。
+4. **顺手修掉一个配色错位**：关于页的 `dark` 原来取 `isSystemInDarkTheme()`，
+   而页面其余部分跟随 App 自己的配色。App 设浅色 + 系统深色时会渲染成
+   「蓝紫渐变底 + 深色版本号」，对比度很差。改为按实际背景亮度判断
+   （`MiuixTheme.colorScheme.background.luminance() < 0.5f`，与 `MiuixAppRoot`
+   / `HomePage` 一致），此时回到浅色渐变 + 深色文字。
+5. 真机（Xiaomi 2509FPN0BC / Android 17 / HyperOS 4.0.5）验证：关于页标题渐变
+   `#5B4BFF→#A855F7→#F0629B` 与 Logo 同色系；桌面图标与关于页图形一致；
+   系统深色 + App 浅色组合下版本号恢复可读。
+
 ### 2026-11-19 第十六轮（多设备兼容性加固）
 
 1. **AOD 目标类匹配放宽（`ThemeProbeV2`）**：

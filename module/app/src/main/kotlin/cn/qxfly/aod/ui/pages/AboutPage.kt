@@ -8,7 +8,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -41,6 +40,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -97,7 +97,9 @@ fun AboutPage(bottomPadding: Dp) {
     val context = LocalContext.current
     val navigator = LocalNavigator.current
     val version = rememberVersionDisplay(context)
-    val dark = isSystemInDarkTheme()
+    // 跟随 App 实际生效的配色（而不是系统值）：App 设为浅色、系统为深色时，
+    // 若这里读系统值就会出现「蓝紫渐变底 + 深色版本号」的低对比组合。
+    val dark = MiuixTheme.colorScheme.background.luminance() < 0.5f
     val listState = rememberLazyListState()
 
     val screenHeight = LocalConfiguration.current.screenHeightDp.dp
@@ -300,9 +302,9 @@ private fun AboutHero(
             style = TextStyle(
                 brush = Brush.linearGradient(
                     if (dark) {
-                        listOf(Color(0xFFC79CFF), Color(0xFF9B6BFF), Color(0xFFE0A6FF))
+                        listOf(Color(0xFFC7B9FF), Color(0xFFE9A8FF), Color(0xFFFFB3C7))
                     } else {
-                        listOf(Color(0xFF7B2CBF), Color(0xFF4A148C), Color(0xFF9D4EDD))
+                        listOf(Color(0xFF5B4BFF), Color(0xFFA855F7), Color(0xFFF0629B))
                     },
                 ),
             ),
@@ -316,36 +318,54 @@ private fun AboutHero(
     }
 }
 
-/** 应用图标：圆角渐变块 + 白色方框与圆点（参考图 logo 的抽象复刻）。 */
+/**
+ * 应用标识：与桌面图标（ic_launcher_foreground）同一套几何与配色。
+ *
+ * <p>几何全部按 108 视口的数值换算，改这里必须同步改 vector：
+ * left 29.4 / 条高 7.6 / tops 35.2·50.2·65.2 / widths 49.5·40.8·32.1。
+ */
 @Composable
 internal fun AppMark(modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(26.dp))
+            .clip(RoundedCornerShape(24.dp))
             .background(
                 Brush.linearGradient(
-                    listOf(Color(0xFF7B2CBF), Color(0xFF4A148C)),
+                    colorStops = arrayOf(
+                        0f to Color(0xFF5B4BFF),
+                        0.34f to Color(0xFF7C4DFF),
+                        0.68f to Color(0xFFB65CF5),
+                        1f to Color(0xFFFF6FA5),
+                    ),
                 ),
             ),
-        contentAlignment = Alignment.Center,
     ) {
         Canvas(Modifier.fillMaxSize()) {
-            val side = size.minDimension
-            val stroke = side * 0.055f
-            val inset = side * 0.20f
-            val ringSide = side - inset * 2
-            drawRoundRect(
-                color = Color.White.copy(alpha = 0.94f),
-                topLeft = Offset(inset, inset),
-                size = Size(ringSide, ringSide),
-                cornerRadius = CornerRadius(ringSide * 0.26f),
-                style = Stroke(width = stroke),
+            // 左上角柔和高光，和 vector 底图的 radial 高光对位。
+            drawRect(
+                brush = Brush.radialGradient(
+                    colors = listOf(Color.White.copy(alpha = 0.22f), Color.Transparent),
+                    center = Offset(size.width * 0.26f, size.height * 0.14f),
+                    radius = size.minDimension * 0.78f,
+                ),
             )
-            drawCircle(
-                color = Color.White,
-                radius = side * 0.075f,
-                center = Offset(side * 0.775f, side * 0.225f),
+            val barHeight = size.height * 0.0704f
+            val barLeft = size.width * 0.2722f
+            val radius = barHeight / 2f
+            // (top, width, alpha)：三条宽度递减的歌词行。
+            val rows = listOf(
+                Triple(0.3259f, 0.4583f, 1.0f),
+                Triple(0.4639f, 0.3778f, 0.92f),
+                Triple(0.6019f, 0.2972f, 0.80f),
             )
+            rows.forEach { (top, width, alpha) ->
+                drawRoundRect(
+                    color = Color.White.copy(alpha = alpha),
+                    topLeft = Offset(barLeft, size.height * top),
+                    size = Size(size.width * width, barHeight),
+                    cornerRadius = CornerRadius(radius, radius),
+                )
+            }
         }
     }
 }
