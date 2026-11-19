@@ -64,15 +64,29 @@ public final class ModuleReporter {
             return;
         }
         Bundle module = sPendingModule;
-        if (module != null) {
+        if (module != null && push(context, module, "module(flushed)")) {
             sPendingModule = null;
-            push(context, module, "module(flushed)");
         }
         Bundle status = sPendingStatus;
-        if (status != null) {
+        if (status != null && push(context, status, "status(flushed)")) {
             sPendingStatus = null;
-            push(context, status, "status(flushed)");
         }
+    }
+
+    /**
+     * Retry hook for the deferred reports.
+     *
+     * <p>The Application-creation anchors do not fire in every host process
+     * (HyperOS 3 / Android 16 SystemUI never called back), which left the
+     * module/status reports pending forever while lyric reports went through
+     * via {@code currentApplication()}. The lyric poll thread calls this once
+     * a second, so the UI reflects "activated" as soon as a context exists.
+     */
+    public static void flushPendingIfReady() {
+        if (sPendingModule == null && sPendingStatus == null) {
+            return;
+        }
+        flushPending();
     }
 
     public void reportModule(String api, String framework) {
@@ -123,6 +137,7 @@ public final class ModuleReporter {
         if (context == null) {
             return;
         }
+        flushPendingIfReady();
         mLastLyricPush = now;
         Bundle b = new Bundle();
         b.putString(StateKeys.TYPE, StateKeys.TYPE_LYRIC);
@@ -145,6 +160,7 @@ public final class ModuleReporter {
         if (context == null) {
             return;
         }
+        flushPendingIfReady();
         Bundle b = new Bundle();
         b.putString(StateKeys.TYPE, StateKeys.TYPE_LYRIC);
         b.putString(StateKeys.LYRIC_LINE, "");
@@ -169,6 +185,7 @@ public final class ModuleReporter {
             AodLog.w("report components dropped: no host context");
             return;
         }
+        flushPendingIfReady();
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < lines.size() && i < 60; i++) {
             if (i > 0) {
@@ -183,15 +200,17 @@ public final class ModuleReporter {
         push(context, b, "components");
     }
 
-    private static void push(@NonNull Context context, @NonNull Bundle payload,
-                             @NonNull String what) {
+    private static boolean push(@NonNull Context context, @NonNull Bundle payload,
+                                @NonNull String what) {
         try {
             context.getContentResolver().call(
                     StateKeys.stateUri(), StateKeys.METHOD_UPDATE, null, payload);
             AodLog.i("report " + what + " -> provider ok");
+            return true;
         } catch (Throwable t) {
             AodLog.w("report " + what + " -> provider FAILED: "
                     + t.getClass().getName() + ": " + t.getMessage());
+            return false;
         }
     }
 

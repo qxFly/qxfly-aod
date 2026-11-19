@@ -667,6 +667,41 @@ loadClass 监听器（`TARGET_DOZE_MACHINE`，与 DozeServicePluginImpl 同款�
 - 全流程实测：`-Clean` 全量构建成功（约 21s，8.71 MB，2 dex，489 个资源符号），
   签名证书与之前一致（可覆盖安装）。
 
+### 2026-11-19 第十五轮（HyperOS 3 / Android 16 状态上报修复）
+
+1. **现象**：换到 Xiaomi 14（`23127PN0CC`，Android 16 / HyperOS 3
+   OS3.0.303.0）后，App 主页一直显示「未激活」，SuperLyric 卡片为
+   「—」，Xposed 框架只剩「LSPosed」；但 AOD 里歌词链路其实已经在跑。
+2. **排查结论（不是 LSPosed 没激活）**：
+   - HyperOS 3 起 AOD 渲染搬进了 **`com.android.systemui`** 进程
+     （`MIUIAod.apk` 以插件形式加载，日志里可见
+     `DozeServicePluginImpl loaded by PathClassLoader[... MIUIAod.apk]`
+     与 `hooked onDreamingStarted(ViewGroup)`），`com.miui.aod` 不再常驻。
+     `scope.list` 已同时包含 `com.miui.aod` 与 `com.android.systemui`，
+     新装即默认勾选，无需手动加作用域。
+   - logcat 里能看到 `SuperLyric registered: OK`、`lyric overlay attached`、
+     `report lyric -> provider ok`，说明注入与歌词投喂都正常；
+     provider 里也有 `lyricTrack/lyricLine`。
+   - 缺的只有 `hooksInstalled` / `moduleApi` / `moduleFramework`：
+     这两条上报发生在 `onPackageReady` 早期，此时宿主 Application 尚未
+     创建，被放进 `sPendingModule` / `sPendingStatus` 等
+     `Instrumentation.callApplicationOnCreate` / `Application.attach`
+     的锚点回调来补发；**这两个锚点在 HyperOS 3 的 SystemUI 里没有触发**
+     （歌词上报走 `ActivityThread.currentApplication()` 兜底所以正常），
+     待发队列于是永远滞留 → UI 判成未激活。
+3. **修复（`ModuleReporter` / `LyricBridge`）**：
+   - 新增 `flushPendingIfReady()`，由歌词轮询线程每秒调用一次，也插到
+     `reportLyric` / `reportLyricStop` / `reportComponents` 里，不再依赖
+     Application 锚点。
+   - `push()` 改为返回成功与否，`flushPending()` 只在实际推送成功后才
+     清空待发队列——失败下轮重试，不再丢状态。
+4. **真机验证（重启后）**：provider 出现
+   `hooksInstalled=true, moduleApi=102, moduleFramework=LSPosed 2.2.1,
+   hookDetail=getString + parseLyric + overlay`；主页恢复「已激活 /
+   SuperLyric 已接入 / 开关 开」，信息卡显示 `102 · LSPosed 2.2.1`；
+   锚点组件列表也正常枚举（`clockGradientLinearLayout`、`imageSquareFrameLayout`、
+   `timedateLinearLayout`、`notifyNotificationContainer`）。
+
 ### 2026-11-19 第十四轮（主页/关于页按参考图重构 + 四标签 + 仓库初始化）
 
 1. **主页按 `docs/assets/主页.jpg` 重构（UI，真机验证）**：

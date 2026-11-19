@@ -101,6 +101,9 @@ public final class LyricBridge {
             });
             sPoller.scheduleWithFixedDelay(() -> {
                 try {
+                    // Deferred module/status reports: retry here because the
+                    // Application-creation anchors are unreliable in SystemUI.
+                    ModuleReporter.flushPendingIfReady();
                     ProviderLrcSource source = sProviderLrc;
                     if (source == null) {
                         return;
