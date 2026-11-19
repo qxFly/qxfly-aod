@@ -102,7 +102,7 @@ public final class AodLyricModule extends XposedModule {
      * after an update is guesswork (a host that was never restarted keeps
      * running the previous build and produces no new logs at all).
      */
-    public static final String BUILD = "7.4.0/46";
+    public static final String BUILD = "7.4.1/47";
 
     @Override
     public void onModuleLoaded(@NonNull XposedModuleInterface.ModuleLoadedParam param) {

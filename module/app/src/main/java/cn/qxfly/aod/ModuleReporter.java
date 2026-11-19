@@ -32,6 +32,11 @@ public final class ModuleReporter {
     private volatile long mLastLyricPush;
     private volatile boolean mStatusPushed;
 
+    /** Minimum gap between deferred-report retries (see flushPendingIfReady). */
+    private static final long FLUSH_RETRY_INTERVAL_MS = 5000L;
+
+    private static volatile long sLastFlushAttemptMs;
+
     public ModuleReporter(@NonNull XposedInterface xp) {
         mXp = xp;
     }
@@ -86,6 +91,13 @@ public final class ModuleReporter {
         if (sPendingModule == null && sPendingStatus == null) {
             return;
         }
+        // Throttle: if the provider stays unreachable, one warning every few
+        // seconds is enough and keeps the host process log readable.
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (now - sLastFlushAttemptMs < FLUSH_RETRY_INTERVAL_MS) {
+            return;
+        }
+        sLastFlushAttemptMs = now;
         flushPending();
     }
 

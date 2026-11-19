@@ -667,6 +667,33 @@ loadClass 监听器（`TARGET_DOZE_MACHINE`，与 DozeServicePluginImpl 同款�
 - 全流程实测：`-Clean` 全量构建成功（约 21s，8.71 MB，2 dex，489 个资源符号），
   签名证书与之前一致（可覆盖安装）。
 
+### 2026-11-19 第十六轮（多设备兼容性加固）
+
+1. **AOD 目标类匹配放宽（`ThemeProbeV2`）**：
+   - 原来按精确类名匹配 `com.miui.aod.doze.DozeServicePluginImpl` /
+     `DozeService` / `DozeMachine` / `com.miui.aod.utils.CommonUtils` /
+     `com.miui.maml.ScreenElementRoot`，厂商换包名（如
+     `com.xiaomi.aod.*`）或改内部路径就直接失效。
+   - 改为「AOD 包族（`com.miui.aod.` / `com.xiaomi.aod.`）+ 类名后缀」
+     匹配（`.doze.DozeServicePluginImpl` 等），精确类名仍是快路径；
+     MAML 根只按 `.maml.ScreenElementRoot` 后缀匹配，避免误挂同名类。
+   - `probeAlreadyLoaded` 额外按 `com.xiaomi.aod.*` 预探测一遍——插件
+     通常在模块就绪前就已加载，只靠 loadClass 监听会漏。
+
+2. **待发上报重试节流（`ModuleReporter`）**：`flushPendingIfReady()`
+   最多 5 秒重试一次；provider 长期不可用时不再每秒刷一条告警日志。
+
+3. **BUILD 标记升到 `7.4.1/47`**，便于确认注入的是哪一版 dex。
+
+4. **对老设备是否兼容**：兼容，且是严格超集——
+   - 类匹配：精确命中优先，行为与之前完全一致；
+   - 上报：旧设备由 Application 锚点正常清空待发队列，
+     `flushPendingIfReady()` 直接空转返回；`push()` 改为只在成功时清队列，
+     失败会重试而不是丢弃，属于纯增强；
+   - 快速验证：Xiaomi 14（HyperOS 3 / Android 16）重启后主页「已激活」，
+     AOD 日志 `found clock_container -> AodContainerView`、
+     `lyric parented to clock_container`、`lyric overlay attached to AOD root`。
+
 ### 2026-11-19 第十五轮（HyperOS 3 / Android 16 状态上报修复）
 
 1. **现象**：换到 Xiaomi 14（`23127PN0CC`，Android 16 / HyperOS 3

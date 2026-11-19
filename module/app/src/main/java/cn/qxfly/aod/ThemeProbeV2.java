@@ -41,6 +41,40 @@ public final class ThemeProbeV2 {
      *  double-tap path (DozeHost.onDoubleTap -> CommonUtils.requestWakeUp). */
     public static final String TARGET_COMMON_UTILS = "com.miui.aod.utils.CommonUtils";
 
+    /**
+     * Renamed-copy fallbacks. Different MIUI/HyperOS builds move the AOD plugin
+     * between packages (com.miui.aod / com.xiaomi.aod, or a vendor copy) while
+     * keeping the same class names, so matching by the tail keeps those devices
+     * working without touching the canonical fast path.
+     */
+    private static final String TAIL_DOZE_PLUGIN = ".doze.DozeServicePluginImpl";
+    private static final String TAIL_DOZE_SERVICE = ".doze.DozeService";
+    private static final String TAIL_DOZE_MACHINE = ".doze.DozeMachine";
+    private static final String TAIL_COMMON_UTILS = ".utils.CommonUtils";
+    private static final String TAIL_MAML_ROOT = ".maml.ScreenElementRoot";
+
+    /** Alternate packages probed eagerly when the canonical one is absent. */
+    private static final String[] ALT_AOD_PACKAGES = {
+            "com.xiaomi.aod", "com.miui.aod",
+    };
+
+    private static boolean isAodFamily(@NonNull String name) {
+        return name.startsWith("com.miui.aod.") || name.startsWith("com.xiaomi.aod.");
+    }
+
+    private static boolean matchesTarget(@NonNull String name, @NonNull String canonical,
+                                         @NonNull String tail) {
+        if (canonical.equals(name)) {
+            return true;
+        }
+        // MAML lives outside the AOD package family; the others must stay
+        // inside it so an unrelated CommonUtils cannot be hooked.
+        if (TAIL_MAML_ROOT.equals(tail)) {
+            return name.endsWith(tail);
+        }
+        return isAodFamily(name) && name.endsWith(tail);
+    }
+
     private static final AtomicBoolean sRootHooked = new AtomicBoolean(false);
     private static final AtomicBoolean sPluginHooked = new AtomicBoolean(false);
     private static final AtomicBoolean sMachineHooked = new AtomicBoolean(false);
@@ -198,6 +232,24 @@ public final class ThemeProbeV2 {
      * loadClass moment has passed and we must hook it right now.
      */
     private void probeAlreadyLoaded(@NonNull String className) {
+        if (probeLoadedOnAnyLoader(className)) {
+            return;
+        }
+        // Renamed vendor packages (com.xiaomi.aod.* etc.): try the same class
+        // path under each alternate AOD package.
+        if (className.startsWith("com.miui.aod.")) {
+            String rest = className.substring("com.miui.aod.".length());
+            for (String pkg : ALT_AOD_PACKAGES) {
+                String alt = pkg + "." + rest;
+                if (!alt.equals(className) && probeLoadedOnAnyLoader(alt)) {
+                    return;
+                }
+            }
+        }
+        AodLog.i("not loaded yet (will catch via watcher): " + className);
+    }
+
+    private boolean probeLoadedOnAnyLoader(@NonNull String className) {
         // The AOD plugin classes can live on the host loader OR on the dedicated
         // MIUIAod plugin loader recorded by the watcher - try both.
         for (ClassLoader loader : new ClassLoader[]{mHostLoader,
@@ -210,12 +262,12 @@ public final class ThemeProbeV2 {
                 AodLog.i("already loaded: " + className + " by "
                         + loader.getClass().getSimpleName());
                 watchLoaded(loaded);
-                return;
+                return true;
             } catch (Throwable ignored) {
                 // Not on this loader; try the next one.
             }
         }
-        AodLog.i("not loaded yet (will catch via watcher): " + className);
+        return false;
     }
 
     /** Counts AOD-package classes seen loading, so the log stays bounded. */
@@ -238,24 +290,28 @@ public final class ThemeProbeV2 {
             AodOverlayController.notePluginLoader(loaded.getClassLoader());
         }
 
-        if (TARGET_ROOT.equals(name) && sRootHooked.compareAndSet(false, true)) {
+        if (matchesTarget(name, TARGET_ROOT, TAIL_MAML_ROOT)
+                && sRootHooked.compareAndSet(false, true)) {
             hookAddElement(loaded);
         }
-        if (TARGET_DOZE_PLUGIN.equals(name) && sPluginHooked.compareAndSet(false, true)) {
+        if (matchesTarget(name, TARGET_DOZE_PLUGIN, TAIL_DOZE_PLUGIN)
+                && sPluginHooked.compareAndSet(false, true)) {
             AodLog.i("DozeServicePluginImpl loaded by " + loaded.getClassLoader()
                     + "; hooking AOD lifecycle");
             mOverlay.onPluginImplLoaded(loaded);
         }
-        if (TARGET_DOZE_SERVICE.equals(name)) {
+        if (matchesTarget(name, TARGET_DOZE_SERVICE, TAIL_DOZE_SERVICE)) {
             AodLog.i("DozeService loaded by " + loaded.getClassLoader());
             mOverlay.onDozeServiceLoaded(loaded);
         }
-        if (TARGET_DOZE_MACHINE.equals(name) && sMachineHooked.compareAndSet(false, true)) {
+        if (matchesTarget(name, TARGET_DOZE_MACHINE, TAIL_DOZE_MACHINE)
+                && sMachineHooked.compareAndSet(false, true)) {
             AodLog.i("DozeMachine loaded by " + loaded.getClassLoader()
                     + "; installing fingerprint crash guard");
             installDozeMachineGuard(loaded);
         }
-        if (TARGET_COMMON_UTILS.equals(name) && sWakeHooked.compareAndSet(false, true)) {
+        if (matchesTarget(name, TARGET_COMMON_UTILS, TAIL_COMMON_UTILS)
+                && sWakeHooked.compareAndSet(false, true)) {
             AodLog.i("CommonUtils loaded by " + loaded.getClassLoader()
                     + "; hooking double-tap wake");
             hookRequestWakeUp(loaded);
