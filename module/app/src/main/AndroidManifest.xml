@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="cn.qxfly.aod"
+    android:versionCode="261119001"
+    android:versionName="1.0.261119.001">
+
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="34" />
+
+    <application
+        android:label="@string/app_name"
+        android:icon="@android:drawable/ic_media_play"
+        android:allowBackup="false"
+        android:theme="@android:style/Theme.Material.NoActionBar">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <provider
+            android:name=".AodStateProvider"
+            android:authorities="cn.qxfly.aod.state"
+            android:exported="true" />
+
+        <!-- No xposedmodule/xposedminversion meta-data: those mark a LEGACY
+             module (loaded via assets/xposed_init). Their presence makes LSPosed
+             2.x classify this APK as legacy and skip libxposed loading entirely.
+             SuperLyric - a working libxposed module on this device - has none. -->
+        <meta-data android:name="superlyricapi" android:value="true" />
+        <meta-data android:name="superlyricapi_version_name" android:value="4.0" />
+        <meta-data android:name="superlyricapi_version_code" android:value="40" />
+    </application>
+</manifest>

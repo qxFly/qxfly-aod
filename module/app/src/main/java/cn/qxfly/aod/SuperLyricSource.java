@@ -1,0 +1,212 @@
+package cn.qxfly.aod;
+
+import android.util.Log;
+
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+
+import com.hchen.superlyricapi.LyricListener;
+import com.hchen.superlyricapi.LyricView;
+import com.hchen.superlyricapi.Receiver;
+import com.hchen.superlyricapi.SuperLyric;
+import com.hchen.superlyricapi.model.Lyric;
+import com.hchen.superlyricapi.model.Stop;
+
+import io.github.libxposed.api.XposedInterface;
+
+/**
+ * Receives structured lyrics from the SuperLyric service, keeps the current
+ * LRC for injection, and mirrors a readable view of the same events to the
+ * module UI.
+ */
+public final class SuperLyricSource {
+
+    private final XposedInterface mXp;
+    @NonNull
+    private final ModuleReporter mReporter;
+
+    /** Raw 3.x receiver: the only path that survives line-only payloads. */
+    @NonNull
+    private final LegacyLyricReceiver mLegacyReceiver = new LegacyLyricReceiver();
+
+    @Nullable
+    private volatile String mCurrentLine;
+
+    @Nullable
+    public String currentLine() {
+        return mCurrentLine;
+    }
+
+    /** Translation of {@link #currentLine()}, when the publisher provides one. */
+    @Nullable
+    private volatile String mCurrentTranslation;
+
+    @Nullable
+    public String currentTranslation() {
+        return mCurrentTranslation;
+    }
+
+    @Nullable
+    private volatile String mCurrentLrc;
+
+    @Nullable
+    private volatile String mCurrentTitle;
+
+    @Nullable
+    private volatile String mCurrentArtist;
+
+    private volatile boolean mRegistered;
+
+    /** When this process's own SuperLyric stream last delivered anything
+     *  (lyric or legacy line). Used with the provider's lyricAt to detect a
+     *  killed player: whichever source fed more recently wins. */
+    private volatile long mLastEventAt;
+
+    public long lastEventAt() {
+        return mLastEventAt;
+    }
+
+    public SuperLyricSource(@NonNull XposedInterface xp) {
+        mXp = xp;
+        mReporter = new ModuleReporter(xp);
+    }
+
+    public void register() {
+        if (mRegistered) {
+            return;
+        }
+        mRegistered = true;
+
+        Receiver receiver = SuperLyric.receiver();
+        AodLog.i("SuperLyric.isAvailable=" + SuperLyric.isAvailable()
+                + " serverApiVersion=" + SuperLyric.serverApiVersion());
+
+        Receiver.RegisterResult result = receiver.register(new LyricListener() {
+            @Override
+            public void onLyric(@NonNull LyricView view) {
+                mLastEventAt = System.currentTimeMillis();
+                Lyric doc = view.getLyric();
+                String lrc = LrcBuilder.build(doc);
+                mCurrentLrc = lrc;
+                mCurrentTitle = doc == null ? null : doc.getTitle();
+                mCurrentArtist = doc == null ? null : doc.getArtist();
+
+                com.hchen.superlyricapi.model.Line line = view.getLine();
+                // INFO level: this log is the discriminator between "full doc
+                // delivered" (doc != null) and "legacy current-line stream"
+                // (doc == null), which decides whether injection has anything
+                // to work with in this process.
+                AodLog.i("onLyric: doc="
+                        + (doc == null ? "NULL(current-line stream)" : "full")
+                        + " id=" + (doc == null ? "-" : doc.getId())
+                        + " lines=" + (doc == null ? 0 : doc.getLineCount())
+                        + " index=" + view.getIndex()
+                        + " lrc=" + (lrc == null ? "null" : lrc.length() + " chars"));
+
+                mReporter.reportLyric(
+                        trackLabel(doc),
+                        line == null ? null : line.getText(),
+                        String.valueOf(view.getIndex()),
+                        String.valueOf(doc == null ? 0 : doc.getLineCount()),
+                        lrc == null ? "0" : String.valueOf(lrc.length()));
+            }
+
+            @Override
+            public void onStop(@NonNull Stop stop) {
+                mCurrentLrc = null;
+                mCurrentLine = null;
+                mCurrentTranslation = null;
+                // Clear rather than writing a "(stopped)" placeholder: the
+                // overlay renders LYRIC_LINE verbatim, so a sentinel string would
+                // be displayed as if it were a lyric.
+                mReporter.reportLyric(mCurrentTitle, "",
+                        "-1", "0", "0");
+                // Also clear the whole lyric record in the provider (line,
+                // translation and the full LRC): without this the ghost
+                // lines/LRC survived playback stops in the provider snapshot.
+                mReporter.reportLyricStop();
+                AodOverlayController.setText("");
+                LyricBridge.requestForceEmptyLrc();
+                AodLog.i("onStop: " + stop.getReason());
+            }
+        });
+
+        mReporter.reportStatus(true, "getString + parseLyric + theme probe", result.name());
+
+        // Second, independent path: read the raw 3.x payload so a current-line-only
+        // stream still produces text. SuperLyricApi's Receiver drops those (see
+        // LegacyLyricReceiver's javadoc), which is why nothing ever arrived here.
+        boolean legacyOk = mLegacyReceiver.register(new LegacyLyricReceiver.Sink() {
+            @Override
+            public void onLine(@Nullable String text, @Nullable String title,
+                               @Nullable String artist) {
+                onLine(text, null, title, artist);
+            }
+
+            @Override
+            public void onLine(@Nullable String text, @Nullable String translation,
+                               @Nullable String title, @Nullable String artist) {
+                if (text == null || text.isEmpty()) {
+                    return;
+                }
+                mLastEventAt = System.currentTimeMillis();
+                mCurrentLine = text;
+                mCurrentTranslation = translation;
+                if (title != null && !title.isEmpty()) {
+                    mCurrentTitle = artist == null || artist.isEmpty()
+                            ? title : artist + " - " + title;
+                }
+                // Direct to the AOD overlay in this process...
+                AodOverlayController.setText(text, translation);
+                // ...and to the app UI through the provider.
+                mReporter.reportLyric(mCurrentTitle, text, translation,
+                        "-1", "0", "0");
+            }
+
+            @Override
+            public void onStop() {
+                mCurrentLrc = null;
+                mCurrentLine = null;
+                mCurrentTranslation = null;
+                mReporter.reportLyricStop();
+                AodOverlayController.setText("");
+                LyricBridge.requestForceEmptyLrc();
+                AodLog.i("legacy receiver: stopped");
+            }
+        });
+        AodLog.i("direct legacy receiver: " + (legacyOk ? "registered" : "unavailable"));
+        AodLog.i("SuperLyric register result: " + result);
+        if (result != Receiver.RegisterResult.OK) {
+            AodLog.w("SuperLyric unavailable (" + result + "). "
+                    + "Check that the SuperLyric module is installed and enabled, "
+                    + "and that com.miui.aod passes AccessPolicy (system app).");
+        }
+    }
+
+    @Nullable
+    private static String trackLabel(@Nullable Lyric doc) {
+        if (doc == null) {
+            return null;
+        }
+        String title = doc.getTitle();
+        String artist = doc.getArtist();
+        if (artist == null || artist.isEmpty()) {
+            return title;
+        }
+        return artist + " - " + title;
+    }
+
+    public void unregister() {
+        if (mRegistered) {
+            SuperLyric.receiver().unregisterAll();
+            mRegistered = false;
+            mCurrentLrc = null;
+        }
+    }
+
+    @Nullable
+    public String currentLrc() {
+        return mCurrentLrc;
+    }
+}
+

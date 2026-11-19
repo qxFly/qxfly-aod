@@ -1,0 +1,27 @@
+# 构建产物
+/dist/
+/module/build/
+*.apk
+*.idsig
+
+# 本地工具链与临时目录
+/.deps/
+/.tmp/
+/.tools/
+
+# IDE / 系统
+.idea/
+*.iml
+.gradle/
+.DS_Store
+Thumbs.db
+
+# work/ 内的上游参考源码（仅本地逆向参考，构建不需要）
+/work/SuperLyric-master/
+/work/SuperLyricApi/
+/work/Lyric-Getter/
+/work/Lyric-Getter-Api/
+/work/cn.aodlyric.xiaowine-main/
+/work/apk_src/
+/work/apk_res/
+/work/mod_src/

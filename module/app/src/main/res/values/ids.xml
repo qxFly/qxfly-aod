@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      ComposeView (androidx.compose.ui.platform) reads these two ids from
+      androidx.customview.poolingcontainer. That library ships them as AAR
+      resources, and this project builds with aapt2 only (no AAR resource
+      merging), so they must be declared here or the app crashes with
+      NoClassDefFoundError: androidx/customview/poolingcontainer/R$id.
+    -->
+    <item name="is_pooling_container_tag" type="id"/>
+    <item name="pooling_container_listener_holder_tag" type="id"/>
+</resources>

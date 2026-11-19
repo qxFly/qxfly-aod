@@ -1,0 +1,1084 @@
+package cn.qxfly.aod.ui.pages
+
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import cn.qxfly.aod.LyricStyle
+import cn.qxfly.aod.R
+import cn.qxfly.aod.ui.core.ModuleData
+import kotlinx.coroutines.delay
+import top.yukonga.miuix.kmp.basic.ButtonDefaults
+import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.Slider
+import top.yukonga.miuix.kmp.basic.Switch
+import top.yukonga.miuix.kmp.basic.TextButton
+import top.yukonga.miuix.kmp.preference.OverlayDropdownPreference
+import top.yukonga.miuix.kmp.preference.SwitchPreference
+import top.yukonga.miuix.kmp.theme.MiuixTheme
+
+/** 歌词外观的本地编辑草稿；「保存并应用」才写入 Provider。 */
+data class StyleDraft(
+    val textSizeSp: Float = 20f,
+    val textColor: Int = 0xFFFFFFFF.toInt(),
+    val typefaceName: String? = null,
+    val strokeWidth: Float = 0f,
+    val strokeColor: Int = 0xFF000000.toInt(),
+    val weight: Int = 0,
+    val offsetRatio: Float = 0.42f,
+    /** 0 居中（与组件一致），1 靠左，2 靠右。 */
+    val align: Int = 0,
+    /** 锚点组件资源名；null/空 = 用百分比偏移（旧模式）。 */
+    val anchorId: String? = null,
+    /** 0 = 锚点上方，1 = 锚点下方。 */
+    val anchorPos: Int = 1,
+    /** 与锚点边缘的间距（px）。 */
+    val anchorGap: Float = 12f,
+    /** true = 把歌词插进组件树的锚点槽位，由原生布局引擎排位。 */
+    val treeInsert: Boolean = false,
+    /** true = 发行方提供翻译时，在原文下方显示翻译。 */
+    val showTranslation: Boolean = false,
+    /** true = 在每行歌词后面画圆角色块。 */
+    val bgEnabled: Boolean = false,
+    /** 背景色块颜色（ARGB）。 */
+    val bgColor: Int = 0xFF000000.toInt(),
+    /** 背景色块不透明度 0..1。 */
+    val bgAlpha: Float = 0.45f,
+)
+
+internal fun LyricStyle.toDraft() = StyleDraft(
+    textSizeSp = textSizeSp,
+    textColor = textColor,
+    typefaceName = typefaceName,
+    strokeWidth = strokeWidth,
+    strokeColor = strokeColor,
+    weight = weight,
+    offsetRatio = offsetRatio,
+    align = align,
+    anchorId = anchorId,
+    anchorPos = anchorPos,
+    anchorGap = anchorGap,
+    treeInsert = treeInsert,
+    showTranslation = showTranslation,
+    bgEnabled = bgEnabled,
+    bgColor = bgColor,
+    bgAlpha = bgAlpha,
+)
+
+internal fun StyleDraft.toLyricStyle() = LyricStyle().apply {
+    textSizeSp = this@toLyricStyle.textSizeSp
+    textColor = this@toLyricStyle.textColor
+    typefaceName = this@toLyricStyle.typefaceName
+    strokeWidth = this@toLyricStyle.strokeWidth
+    strokeColor = this@toLyricStyle.strokeColor
+    weight = this@toLyricStyle.weight
+    offsetRatio = this@toLyricStyle.offsetRatio
+    align = this@toLyricStyle.align
+    anchorId = canonicalAnchorValue(this@toLyricStyle.anchorId)
+    anchorPos = this@toLyricStyle.anchorPos
+    anchorGap = this@toLyricStyle.anchorGap
+    treeInsert = this@toLyricStyle.treeInsert
+    showTranslation = this@toLyricStyle.showTranslation
+    bgEnabled = this@toLyricStyle.bgEnabled
+    bgColor = this@toLyricStyle.bgColor
+    bgAlpha = this@toLyricStyle.bgAlpha
+}
+
+/** 粗粒度锚点（与 Hook 侧 ANCHOR_* 一致）：大时钟 / 图片 / 时间日期组件 / 通知。 */
+private val COARSE_ANCHORS = setOf("clock", "image", "timedate", "notify")
+
+/** 旧细粒度锚点 -> 最近粗粒度锚点（与 Hook 侧 legacyToCanonical 规则一致）。 */
+internal fun coarseAnchorId(id: String?): String? {
+    val l = id?.lowercase() ?: return null
+    return when {
+        listOf("shower", "image", "gallery", "photo", "wallpaper", "cover", "album")
+            .any(l::contains) -> "image"
+        listOf("gradient", "clock_container", "clock_vertical", "big")
+            .any(l::contains) -> "clock"
+        listOf("icon", "notif").any(l::contains) -> "notify"
+        listOf("clock", "date", "time", "lunar", "battery", "step")
+            .any(l::contains) -> "timedate"
+        else -> null
+    }
+}
+
+/** 保存前归一化：已是粗粒度 id 原样保留，旧 id 映射，未识别的保持原值。 */
+private fun canonicalAnchorValue(id: String?): String? {
+    if (id.isNullOrEmpty() || COARSE_ANCHORS.contains(id)) {
+        return id
+    }
+    return coarseAnchorId(id) ?: id
+}
+
+/**
+ * 歌词外观卡片（显示在歌词页）：字号 / 描边 / 颜色 / 字体 / 对齐 /
+ * 锚点定位（4 个粗粒度区域）+ 所见即所得预览。
+ */
+@Composable
+internal fun StyleEditorCard(data: ModuleData) {
+    var draft by remember { mutableStateOf(data.currentStyle().toDraft()) }
+    var statusLine by remember { mutableStateOf("") }
+    var showColorPicker by remember { mutableStateOf(false) }
+    var showStrokeColorPicker by remember { mutableStateOf(false) }
+    var showBgColorPicker by remember { mutableStateOf(false) }
+    val components by data.components.collectAsStateWithLifecycle()
+
+    // 自定义字体：文件由系统文件选择器（SAF）导入到应用私有目录，
+    // Hook 进程经 Provider 读取；这里只记录展示用的原始文件名。
+    val context = LocalContext.current
+    var customFontLabel by remember { mutableStateOf(readCustomFontLabel(context)) }
+    val fontImportFailedMsg = stringResource(R.string.font_custom_failed)
+    val fontPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) {
+            val name = importCustomFont(context, uri)
+            if (name != null) {
+                customFontLabel = name
+                draft = draft.copy(typefaceName = "custom")
+                statusLine = name
+            } else {
+                statusLine = fontImportFailedMsg
+            }
+        }
+    }
+
+    // 提示自动消失：旧实现把「已保存」永久留在界面上，行高变化还会把按钮
+    // 挤走，第二次点击因此落空。现在 2 秒后清空，并用固定高度占位。
+    LaunchedEffect(statusLine) {
+        if (statusLine.isNotEmpty()) {
+            delay(2000)
+            statusLine = ""
+        }
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp),
+        insideMargin = PaddingValues(16.dp),
+    ) {
+        Text(
+            text = stringResource(R.string.style_current_summary, draft.textSizeSp, draft.offsetRatio),
+            fontSize = 12.sp,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+        )
+        Spacer(Modifier.height(10.dp))
+
+        StylePreview(draft)
+        Spacer(Modifier.height(12.dp))
+
+        SliderRow(
+            label = stringResource(R.string.style_text_size),
+            value = draft.textSizeSp,
+            range = 12f..40f,
+            defaultValue = 20f,
+            format = { "${it.toInt()}" },
+            onChange = { draft = draft.copy(textSizeSp = it) },
+        )
+        SliderRow(
+            label = stringResource(R.string.style_stroke_width),
+            value = draft.strokeWidth,
+            range = 0f..6f,
+            defaultValue = 0f,
+            onChange = { draft = draft.copy(strokeWidth = it) },
+        )
+        if (draft.strokeWidth > 0.5f) {
+            Text(
+                text = stringResource(R.string.style_stroke_color),
+                fontSize = 13.sp,
+                modifier = Modifier.padding(top = 2.dp, bottom = 4.dp),
+            )
+            ColorSwatches(
+                selected = draft.strokeColor,
+                onPick = { draft = draft.copy(strokeColor = it) },
+                onCustom = { showStrokeColorPicker = true },
+            )
+        }
+
+        val anchored = !draft.anchorId.isNullOrEmpty()
+        if (!anchored) {
+            SliderRow(
+                label = stringResource(R.string.style_offset),
+                value = draft.offsetRatio,
+                range = 0f..0.9f,
+                defaultValue = 0.42f,
+                onChange = { draft = draft.copy(offsetRatio = it) },
+            )
+        }
+
+        Spacer(Modifier.height(10.dp))
+        OverlayDropdownPreference(
+            title = stringResource(R.string.style_align),
+            items = listOf(
+                stringResource(R.string.style_align_center),
+                stringResource(R.string.style_align_left),
+                stringResource(R.string.style_align_right),
+            ),
+            selectedIndex = draft.align.coerceIn(0, 2),
+            onSelectedIndexChange = { index ->
+                draft = draft.copy(align = index)
+            },
+        )
+
+        Spacer(Modifier.height(10.dp))
+        Text(stringResource(R.string.style_anchor_section), fontSize = 13.sp, fontWeight = FontWeight.Medium)
+        Spacer(Modifier.height(6.dp))
+        SwitchPreference(
+            title = stringResource(R.string.style_anchor_mode),
+            summary = stringResource(R.string.style_anchor_mode_summary),
+            checked = anchored,
+            enabled = components.isNotEmpty() || anchored,
+            onCheckedChange = { enabled ->
+                draft = draft.copy(
+                    anchorId = if (enabled) {
+                        components.firstOrNull()?.id ?: draft.anchorId
+                    } else {
+                        null
+                    },
+                )
+            },
+        )
+        if (anchored) {
+            if (components.isEmpty()) {
+                Text(
+                    text = stringResource(R.string.style_anchor_empty),
+                    fontSize = 12.sp,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    modifier = Modifier.padding(vertical = 4.dp),
+                )
+            } else {
+                OverlayDropdownPreference(
+                    title = stringResource(R.string.style_anchor_component),
+                    items = components.map { it.label },
+                    selectedIndex = components.indexOfFirst {
+                        it.id == draft.anchorId || coarseAnchorId(draft.anchorId) == it.id
+                    }.coerceAtLeast(0),
+                    onSelectedIndexChange = { index ->
+                        draft = draft.copy(anchorId = components[index].id)
+                    },
+                )
+                OverlayDropdownPreference(
+                    title = stringResource(R.string.style_anchor_position),
+                    items = listOf(
+                        stringResource(R.string.style_anchor_above),
+                        stringResource(R.string.style_anchor_below),
+                    ),
+                    selectedIndex = if (draft.anchorPos == 0) 0 else 1,
+                    onSelectedIndexChange = { index ->
+                        draft = draft.copy(anchorPos = index)
+                    },
+                )
+                SliderRow(
+                    label = stringResource(R.string.style_anchor_gap),
+                    value = draft.anchorGap,
+                    range = 0f..80f,
+                    defaultValue = 12f,
+                    format = { "${it.toInt()}" },
+                    onChange = { draft = draft.copy(anchorGap = it) },
+                )
+                SwitchPreference(
+                    title = stringResource(R.string.style_tree_insert),
+                    summary = stringResource(R.string.style_tree_insert_summary),
+                    checked = draft.treeInsert,
+                    onCheckedChange = { enabled ->
+                        draft = draft.copy(treeInsert = enabled)
+                    },
+                )
+            }
+        }
+
+        Spacer(Modifier.height(10.dp))
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(stringResource(R.string.style_bg), fontSize = 13.sp)
+                Text(
+                    text = stringResource(R.string.style_bg_summary),
+                    fontSize = 11.sp,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                )
+            }
+            Switch(
+                checked = draft.bgEnabled,
+                onCheckedChange = { v -> draft = draft.copy(bgEnabled = v) },
+            )
+        }
+        if (draft.bgEnabled) {
+            Text(
+                text = stringResource(R.string.style_bg_color),
+                fontSize = 13.sp,
+                modifier = Modifier.padding(top = 2.dp, bottom = 4.dp),
+            )
+            ColorSwatches(
+                selected = draft.bgColor,
+                onPick = { draft = draft.copy(bgColor = it) },
+                onCustom = { showBgColorPicker = true },
+            )
+            SliderRow(
+                label = stringResource(R.string.style_bg_alpha),
+                value = draft.bgAlpha,
+                range = 0f..1f,
+                defaultValue = 0.45f,
+                format = { "${(it * 100).toInt()}%" },
+                toInput = { Math.round(it * 100).toString() },
+                fromInput = { it.trim().removeSuffix("%").trim().toFloatOrNull()?.div(100f) },
+                onChange = { draft = draft.copy(bgAlpha = it) },
+            )
+        }
+
+        Spacer(Modifier.height(10.dp))
+        Text(stringResource(R.string.style_color), fontSize = 13.sp)
+        ColorSwatches(
+            selected = draft.textColor,
+            onPick = { draft = draft.copy(textColor = it) },
+            onCustom = { showColorPicker = true },
+        )
+
+        Spacer(Modifier.height(10.dp))
+        Text(stringResource(R.string.style_typeface), fontSize = 13.sp)
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(top = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            StyleFonts.forEach { (labelRes, value) ->
+                SelectableChip(
+                    label = stringResource(labelRes),
+                    selected = draft.typefaceName == value,
+                    modifier = Modifier.weight(1f),
+                    onClick = { draft = draft.copy(typefaceName = value) },
+                )
+            }
+            SelectableChip(
+                label = stringResource(R.string.font_custom),
+                selected = draft.typefaceName == "custom",
+                modifier = Modifier.weight(1f),
+                onClick = { draft = draft.copy(typefaceName = "custom") },
+            )
+        }
+        if (draft.typefaceName == "custom") {
+            Spacer(Modifier.height(8.dp))
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = customFontLabel.ifEmpty {
+                            stringResource(R.string.font_custom_none)
+                        },
+                        fontSize = 12.sp,
+                    )
+                    Text(
+                        text = stringResource(R.string.font_custom_hint),
+                        fontSize = 11.sp,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    )
+                }
+                TextButton(
+                    text = stringResource(R.string.font_custom_import),
+                    onClick = { fontPicker.launch(FONT_MIME_TYPES) },
+                )
+            }
+        }
+
+        Spacer(Modifier.height(10.dp))
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(stringResource(R.string.style_bold), Modifier.weight(1f), fontSize = 13.sp)
+            Switch(
+                checked = draft.weight == 0,
+                onCheckedChange = { bold -> draft = draft.copy(weight = if (bold) 0 else 1) },
+            )
+        }
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(stringResource(R.string.style_show_translation), fontSize = 13.sp)
+                Text(
+                    text = stringResource(R.string.style_show_translation_summary),
+                    fontSize = 11.sp,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                )
+            }
+            Switch(
+                checked = draft.showTranslation,
+                onCheckedChange = { v -> draft = draft.copy(showTranslation = v) },
+            )
+        }
+
+        Spacer(Modifier.height(12.dp))
+        val savedMsg = stringResource(R.string.style_saved)
+        val resetMsg = stringResource(R.string.style_reset_done)
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            TextButton(
+                text = stringResource(R.string.style_save),
+                onClick = {
+                    data.save(draft.toLyricStyle())
+                    statusLine = savedMsg
+                },
+                modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.textButtonColorsPrimary(),
+            )
+            TextButton(
+                text = stringResource(R.string.style_reset),
+                onClick = {
+                    draft = StyleDraft()
+                    statusLine = resetMsg
+                },
+                modifier = Modifier.weight(1f),
+            )
+        }
+        // 固定高度占位：提示出现/消失都不会改变按钮位置，避免第二次点击落空。
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(20.dp)
+                .padding(top = 4.dp),
+        ) {
+            if (statusLine.isNotEmpty()) {
+                Text(
+                    text = statusLine,
+                    fontSize = 12.sp,
+                    color = MiuixTheme.colorScheme.primary,
+                )
+            }
+        }
+    }
+
+    if (showColorPicker) {
+        ColorPickerDialog(
+            initial = draft.textColor,
+            onDismiss = { showColorPicker = false },
+            onConfirm = { argb ->
+                draft = draft.copy(textColor = argb)
+                showColorPicker = false
+            },
+        )
+    }
+    if (showStrokeColorPicker) {
+        ColorPickerDialog(
+            initial = draft.strokeColor,
+            onDismiss = { showStrokeColorPicker = false },
+            onConfirm = { argb ->
+                draft = draft.copy(strokeColor = argb)
+                showStrokeColorPicker = false
+            },
+        )
+    }
+    if (showBgColorPicker) {
+        ColorPickerDialog(
+            initial = draft.bgColor,
+            onDismiss = { showBgColorPicker = false },
+            onConfirm = { argb ->
+                draft = draft.copy(bgColor = argb)
+                showBgColorPicker = false
+            },
+        )
+    }
+}
+
+/** 选中态明确的文字按钮：字体等选项点击后必须有可见反馈。 */
+@Composable
+private fun SelectableChip(
+    label: String,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    val shape = RoundedCornerShape(10.dp)
+    Box(
+        modifier = modifier
+            .height(32.dp)
+            .clip(shape)
+            .background(
+                if (selected) MiuixTheme.colorScheme.primary
+                else MiuixTheme.colorScheme.surfaceContainer,
+            )
+            .border(
+                width = if (selected) 0.dp else 1.dp,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.35f),
+                shape = shape,
+            )
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            fontSize = 12.sp,
+            color = if (selected) MiuixTheme.colorScheme.onPrimary
+            else MiuixTheme.colorScheme.onSurface,
+        )
+    }
+}
+
+/**
+ * 歌词效果预览：按草稿的字号 / 颜色 / 字体 / 粗细 / 描边 / 对齐
+ * 在深色底上渲染一句样例，即所见即所得。
+ */
+@Composable
+private fun StylePreview(draft: StyleDraft) {
+    val fontFamily = when (draft.typefaceName) {
+        "serif" -> FontFamily.Serif
+        "monospace" -> FontFamily.Monospace
+        "sans-serif" -> FontFamily.SansSerif
+        else -> FontFamily.Default
+    }
+    val fontWeight = if (draft.weight == 0) FontWeight.Bold else FontWeight.Normal
+    val alignment = when (draft.align) {
+        1 -> TextAlign.Start
+        2 -> TextAlign.End
+        else -> TextAlign.Center
+    }
+    // 背景色块：开启时贴着文字画一个圆角矩形（Hook 侧为整体面板）。
+    val bgModifier = if (draft.bgEnabled) {
+        Modifier
+            .clip(RoundedCornerShape(24.dp))
+            .background(Color(draft.bgColor).copy(alpha = draft.bgAlpha))
+            .padding(horizontal = 14.dp, vertical = 6.dp)
+    } else {
+        Modifier
+    }
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color(0xFF0B0E14))
+            .padding(horizontal = 12.dp, vertical = 14.dp),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = when (alignment) {
+                TextAlign.Start -> Alignment.Start
+                TextAlign.End -> Alignment.End
+                else -> Alignment.CenterHorizontally
+            },
+        ) {
+            if (draft.strokeWidth > 0.5f) {
+                // Compose 没有文字描边 API：用 8 向偏移的同字副本模拟。
+                val sw = draft.strokeWidth.coerceIn(0.5f, 6f)
+                Box {
+                    listOf(
+                        -sw to 0f, sw to 0f, 0f to -sw, 0f to sw,
+                        -sw to -sw, sw to -sw, -sw to sw, sw to sw,
+                    ).forEach { (dx, dy) ->
+                        BasicText(
+                            text = stringResource(R.string.style_preview_sample),
+                            style = TextStyle(
+                                fontSize = draft.textSizeSp.sp,
+                                color = Color(draft.strokeColor),
+                                fontWeight = fontWeight,
+                                fontFamily = fontFamily,
+                                textAlign = alignment,
+                            ),
+                            modifier = bgModifier
+                                .then(Modifier.offset(dx.dp, dy.dp)),
+                        )
+                    }
+                    BasicText(
+                        text = stringResource(R.string.style_preview_sample),
+                        style = TextStyle(
+                            fontSize = draft.textSizeSp.sp,
+                            color = Color(draft.textColor),
+                            fontWeight = fontWeight,
+                            fontFamily = fontFamily,
+                            textAlign = alignment,
+                        ),
+                        modifier = bgModifier,
+                    )
+                }
+            } else {
+                BasicText(
+                    text = stringResource(R.string.style_preview_sample),
+                    style = TextStyle(
+                        fontSize = draft.textSizeSp.sp,
+                        color = Color(draft.textColor),
+                        fontWeight = fontWeight,
+                        fontFamily = fontFamily,
+                        textAlign = alignment,
+                        lineHeight = (draft.textSizeSp * 1.1f).sp,
+                    ),
+                    modifier = bgModifier,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 颜色盘：色相 / 饱和度 / 明度三个滑条 + 实时色块预览，
+ * 确定后写回目标颜色（文字色或描边色）。
+ */
+@Composable
+private fun ColorPickerDialog(initial: Int, onDismiss: () -> Unit, onConfirm: (Int) -> Unit) {
+    val start = remember(initial) {
+        FloatArray(3).also { android.graphics.Color.colorToHSV(initial, it) }
+    }
+    var hue by remember { mutableStateOf(start[0]) }
+    var sat by remember { mutableStateOf(start[1] * 100f) }
+    var brightness by remember { mutableStateOf(start[2] * 100f) }
+    val argb = remember(hue, sat, brightness) {
+        android.graphics.Color.HSVToColor(
+            floatArrayOf(hue.coerceIn(0f, 360f), sat / 100f, brightness / 100f),
+        )
+    }
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            insideMargin = PaddingValues(16.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.style_color_title),
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Medium,
+            )
+            Spacer(Modifier.height(12.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(64.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color(argb)),
+                contentAlignment = Alignment.Center,
+            ) {
+                BasicText(
+                    text = stringResource(R.string.style_picker_sample),
+                    style = TextStyle(
+                        fontSize = 22.sp,
+                        color = Color.White,
+                        shadow = Shadow(color = Color(0x99000000), blurRadius = 6f),
+                    ),
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+            SliderRow(stringResource(R.string.style_hue), hue, 0f..360f,
+                defaultValue = start[0], format = { "${it.toInt()}" },
+                onChange = { hue = it })
+            SliderRow(stringResource(R.string.style_sat), sat, 0f..100f,
+                defaultValue = start[1] * 100f, format = { "${it.toInt()}" },
+                onChange = { sat = it })
+            SliderRow(stringResource(R.string.style_val), brightness, 0f..100f,
+                defaultValue = start[2] * 100f, format = { "${it.toInt()}" },
+                onChange = { brightness = it })
+            Spacer(Modifier.height(8.dp))
+            Box(
+                modifier = Modifier.fillMaxWidth(),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "#" + Integer.toHexString(argb or 0xFF000000.toInt())
+                        .uppercase(java.util.Locale.US),
+                    fontSize = 12.sp,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                TextButton(
+                    text = stringResource(R.string.style_cancel),
+                    onClick = onDismiss,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(
+                    text = stringResource(R.string.style_ok),
+                    onClick = { onConfirm(argb) },
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.textButtonColorsPrimary(),
+                )
+            }
+        }
+    }
+}
+
+/** 调色板行：预置色 + 自定义入口（带选中描边）。 */
+@Composable
+private fun ColorSwatches(selected: Int, onPick: (Int) -> Unit, onCustom: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        StyleColors.forEach { argb ->
+            Swatch(
+                color = argb,
+                selected = selected == argb,
+                onClick = { onPick(argb) },
+            )
+        }
+        Swatch(
+            color = selected,
+            selected = StyleColors.none { it == selected },
+            onClick = onCustom,
+            label = "+",
+        )
+    }
+}
+
+@Composable
+private fun Swatch(
+    color: Int,
+    selected: Boolean,
+    onClick: () -> Unit,
+    label: String? = null,
+) {
+    Box(
+        modifier = Modifier
+            .size(30.dp)
+            .clip(androidx.compose.foundation.shape.CircleShape)
+            .background(Color(color))
+            .border(
+                width = if (selected) 2.5.dp else 1.dp,
+                color = if (selected) {
+                    MiuixTheme.colorScheme.primary
+                } else {
+                    MiuixTheme.colorScheme.onSurfaceVariantSummary
+                },
+                shape = androidx.compose.foundation.shape.CircleShape,
+            )
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (label != null) {
+            Text(label, fontSize = 18.sp, color = Color.White)
+        }
+    }
+}
+
+/** slider 行：左侧标签 + 可点击输入的当前值，下面滑条。 */
+@Composable
+private fun SliderRow(
+    label: String,
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    defaultValue: Float,
+    onChange: (Float) -> Unit,
+    format: (Float) -> String = { String.format(java.util.Locale.US, "%.2f", it) },
+    /** 值 → 输入框文本（百分比类滑条覆盖此映射）。 */
+    toInput: (Float) -> String = { trimNumber(it) },
+    /** 输入框文本 → 值（百分比类滑条覆盖为 /100）。 */
+    fromInput: (String) -> Float? = { it.trim().toFloatOrNull() },
+) {
+    var editing by remember { mutableStateOf(false) }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp),
+    ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(label, Modifier.weight(1f), fontSize = 13.sp)
+            Text(
+                text = format(value),
+                fontSize = 12.sp,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { editing = true }
+                    .background(MiuixTheme.colorScheme.surfaceContainer)
+                    .padding(horizontal = 8.dp, vertical = 3.dp),
+            )
+        }
+        Slider(value = value, onValueChange = onChange, valueRange = range)
+    }
+    if (editing) {
+        NumberInputDialog(
+            title = label,
+            initialText = toInput(value),
+            // 范围也用 toInput 映射，百分比滑条才显示 0 ~ 100 而不是 0 ~ 1。
+            rangeText = stringResource(
+                R.string.style_input_hint,
+                toInput(range.start),
+                toInput(range.endInclusive),
+                format(defaultValue),
+            ),
+            onReset = {
+                onChange(defaultValue)
+                editing = false
+            },
+            onDismiss = { editing = false },
+            onConfirm = { text ->
+                val parsed = fromInput(text)
+                if (parsed == null || parsed.isNaN()) {
+                    false
+                } else {
+                    val clamped = parsed.coerceIn(range.start, range.endInclusive)
+                    onChange(clamped)
+                    editing = false
+                    true
+                }
+            },
+        )
+    }
+}
+
+/** 数值输入弹窗：确定 / 取消 / 恢复默认。 */
+@Composable
+private fun NumberInputDialog(
+    title: String,
+    initialText: String,
+    rangeText: String,
+    onReset: () -> Unit,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Boolean,
+) {
+    var text by remember { mutableStateOf(initialText) }
+    var invalid by remember { mutableStateOf(false) }
+    val focus = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+    LaunchedEffect(Unit) {
+        focus.requestFocus()
+        keyboard?.show()
+    }
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            insideMargin = PaddingValues(16.dp),
+        ) {
+            Text(text = title, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+            Text(
+                text = rangeText,
+                fontSize = 11.sp,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+            Spacer(Modifier.height(10.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MiuixTheme.colorScheme.surfaceContainer)
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+            ) {
+                BasicTextField(
+                    value = text,
+                    onValueChange = {
+                        text = it
+                        invalid = false
+                    },
+                    singleLine = true,
+                    textStyle = TextStyle(
+                        fontSize = 17.sp,
+                        color = MiuixTheme.colorScheme.onSurface,
+                    ),
+                    cursorBrush = SolidColor(MiuixTheme.colorScheme.primary),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(focus),
+                )
+            }
+            if (invalid) {
+                Text(
+                    text = stringResource(R.string.style_input_invalid),
+                    fontSize = 11.sp,
+                    color = Color(0xFFDD5346),
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            // 「恢复默认」放独立一行：与「取消/确定」同排会把文字挤成两行。
+            Text(
+                text = stringResource(R.string.style_reset_default),
+                fontSize = 13.sp,
+                color = MiuixTheme.colorScheme.primary,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(onClick = onReset)
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+            )
+            Spacer(Modifier.height(4.dp))
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                TextButton(
+                    text = stringResource(R.string.style_cancel),
+                    onClick = onDismiss,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(
+                    text = stringResource(R.string.style_ok),
+                    onClick = { if (!onConfirm(text)) invalid = true },
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.textButtonColorsPrimary(),
+                )
+            }
+        }
+    }
+}
+
+/** 输入框里的数值：整数不带小数点，其余最多两位小数。 */
+private fun trimNumber(v: Float): String =
+    if (v == v.toInt().toFloat()) {
+        v.toInt().toString()
+    } else {
+        String.format(java.util.Locale.US, "%.2f", v).trimEnd('0').trimEnd('.')
+    }
+
+/** 外观可选颜色（ARGB），与旧界面一致。 */
+private val StyleColors = listOf(
+    0xFFFFFFFF.toInt(),
+    0xFF7D9BFF.toInt(),
+    0xFF6DD58C.toInt(),
+    0xFFF2C55C.toInt(),
+    0xFFF2857C.toInt(),
+    0xFFE8C8FF.toInt(),
+)
+
+/** 字体族选项：显示名资源 → typeface 名（null = 系统默认）。 */
+private val StyleFonts = listOf(
+    R.string.font_system to null,
+    R.string.font_sans to "sans-serif",
+    R.string.font_serif to "serif",
+    R.string.font_mono to "monospace",
+)
+
+/** 自定义字体选择器接受的 MIME（部分文件管理器把 ttf 标成 octet-stream）。 */
+private val FONT_MIME_TYPES = arrayOf(
+    "font/*",
+    "application/x-font-ttf",
+    "application/x-font-otf",
+    "application/octet-stream",
+)
+
+private const val FONT_PREFS = "style"
+private const val FONT_LABEL_KEY = "custom_font_label"
+
+/** 上一次导入的字体原始文件名（仅用于界面展示）。 */
+internal fun readCustomFontLabel(context: android.content.Context): String =
+    context.getSharedPreferences(FONT_PREFS, android.content.Context.MODE_PRIVATE)
+        .getString(FONT_LABEL_KEY, "")
+        .orEmpty()
+
+/**
+ * 把用户在 SAF 里选中的字体拷贝为固定槽位文件 fonts/custom.ttf。
+ *
+ * <p>简单魔数校验拦截误选的任意文件：TrueType（0x00010000 / "true" / "ttcf"）
+ * 或 OpenType（"OTTO"）。成功时返回原始文件名用于展示；已存在的文件被覆盖，
+ * 保存样式后 Hook 侧下次应用样式时重新加载。
+ */
+internal fun importCustomFont(
+    context: android.content.Context,
+    uri: android.net.Uri,
+): String? {
+    return try {
+        val displayName = queryDisplayName(context, uri).orEmpty()
+        val dir = java.io.File(context.filesDir, "fonts").apply { mkdirs() }
+        val out = java.io.File(dir, "custom.ttf")
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            // 边拷贝边读魔数：前 4 字节不是字体就直接拒绝，不再写盘。
+            val head = ByteArray(4)
+            val read = input.read(head)
+            if (read < 4 || !isFontMagic(head)) {
+                return null
+            }
+            out.outputStream().use { output ->
+                output.write(head)
+                input.copyTo(output)
+            }
+        } ?: return null
+        if (out.length() < 512L) {
+            out.delete()
+            return null
+        }
+        context.getSharedPreferences(FONT_PREFS, android.content.Context.MODE_PRIVATE)
+            .edit().putString(FONT_LABEL_KEY, displayName).apply()
+        displayName
+    } catch (t: Throwable) {
+        null
+    }
+}
+
+/** TrueType / OpenType 的文件头。 */
+private fun isFontMagic(head: ByteArray): Boolean {
+    val ttf = head[0] == 0.toByte() && head[1] == 0x01.toByte()
+            && head[2] == 0x00.toByte() && head[3] == 0x00.toByte()
+    val otto = head[0] == 'O'.code.toByte() && head[1] == 'T'.code.toByte()
+            && head[2] == 'T'.code.toByte() && head[3] == 'O'.code.toByte()
+    val truthy = head[0] == 't'.code.toByte() && head[1] == 'r'.code.toByte()
+            && head[2] == 'u'.code.toByte() && head[3] == 'e'.code.toByte()
+    val ttcf = head[0] == 't'.code.toByte() && head[1] == 't'.code.toByte()
+            && head[2] == 'c'.code.toByte() && head[3] == 'f'.code.toByte()
+    return ttf || otto || truthy || ttcf
+}
+
+@Suppress("DEPRECATION")
+private fun queryDisplayName(
+    context: android.content.Context,
+    uri: android.net.Uri,
+): String? {
+    return try {
+        context.contentResolver.query(
+            uri,
+            arrayOf(android.provider.OpenableColumns.DISPLAY_NAME),
+            null, null, null,
+        )?.use { cursor ->
+            val idx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+            if (idx >= 0 && cursor.moveToFirst()) cursor.getString(idx) else null
+        }
+    } catch (t: Throwable) {
+        null
+    }
+}
