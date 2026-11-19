@@ -667,6 +667,61 @@ loadClass 监听器（`TARGET_DOZE_MACHINE`，与 DozeServicePluginImpl 同款�
 - 全流程实测：`-Clean` 全量构建成功（约 21s，8.71 MB，2 dex，489 个资源符号），
   签名证书与之前一致（可覆盖安装）。
 
+### 2026-11-19 第十四轮（主页/关于页按参考图重构 + 四标签 + 仓库初始化）
+
+1. **主页按 `docs/assets/主页.jpg` 重构（UI，真机验证）**：
+   - 顶部：右上角刷新图标（`IconButton` + `MiuixIcons.Refresh`，接
+     `ModuleData.refresher`），下方 34sp 粗体大标题「息屏歌词」。
+   - 状态区：左侧正方形大卡（已激活绿 `#36D167` / 未激活粉
+     `#FF5A52`，右下角 Canvas 绘制的「圈 + 勾」大徽标，内容为状态
+     文案 + 版本号）+ 右侧两个等宽窄卡（「SuperLyric 接入」已接入/
+     未接入/—、「歌词总开关」开/关）。
+   - 版本行文案由「软件版本：%s」改为「版本 %s」——原文案在 14sp
+     下超出左卡宽度会折成两行。
+   - Hook 未注入（`hooksInstalled == false`）时插入黄色警示横幅
+     （浅色 `#FFF3D6` / 深色 `#3A2D12`，随主题切换）。
+   - 信息卡：系统版本 / 应用版本 / Xposed 框架 / 设备型号 / 最近投喂
+     （第 5 行是本项目追加的调试信息，参考图只有 4 行）。
+   - 链接卡：GitHub / 使用教程 / 相关资源，点击分别打开仓库、
+     `docs/README.md`、SuperLyric 仓库。
+
+2. **关于页按 `docs/assets/关于页.jpg` 重构（UI，真机验证）**：
+   - 顶部渐变改为**静态绘制**（Canvas + `CompositingStrategy.Offscreen`
+     + 底部 `BlendMode.DstIn` 渐隐），不做逐帧动画，截图效果一致且
+     不额外耗电；滚动超过 389dp 后渐变整体淡出。
+   - Hero：88dp 圆角渐变图标（白色圆角框 + 圆点）+ 34sp 渐变字应用名
+     + `版本名(versionCode)`；滚动时按进度缩放并淡出。
+   - 分组行卡：开发者（Q 头像 → GitHub 主页）、讨论（问题反馈 →
+     issues）、模块（歌词外观 → `navigator.selectTab(Route.Style)`；
+     检查更新 → releases）、项目（GitHub / 更新日志 / 使用文档 /
+     引用与致谢）。
+
+3. **四标签导航（结构变更）**：
+   - 底栏由 3 个改为 4 个：主页 / 外观 / 设置 / 关于，图标
+     Home / Tune / Settings / Info。
+   - 歌词外观从主页拆出为独立「外观」页（`StylePage.kt`：总开关 +
+     原有 `StyleEditorCard`），主页只保留概览。
+   - `Route` 新增 `Style`，`TabRootRoutes` / `TabRoutes` / `ModuleUi`
+     的标签栈与 `MiuixAppRoot` 的 `entry<Route.Style>` 同步补齐。
+
+4. **刷新链路**：`ModuleData` 新增 `refresher: Runnable?` 与
+   `refresh()`，`MainActivity` 中 `hub.setRefresher(this::refreshState)`，
+   主页右上角按钮直接触发原有 `refreshState()`。
+
+5. **真机验证（Xiaomi 2509FPN0BC / Android 17 / LSPosed 2.2.1）**：
+   主页「已激活 · 版本 1.0.261119.001 / SuperLyric 已接入 / 开关 开」，
+   信息卡与链接卡排版正常、滚动到底不被底栏遮挡；关于页渐变、图标、
+   版本 `1.0.261119.001(261119001)`、四组行卡与滚动淡出均正常；
+   外观页、设置页回归正常。构建 8.74 MB / 527 资源符号 / 2 dex，
+   `adb install -r` 成功。
+
+6. **仓库初始化**：新增根 `README.md`（简介 / 构建命令 / 文档索引 /
+   目录说明）与 `.gitignore`（忽略 `dist/`、`module/build/`、`*.apk`、
+   `.deps/`、`.tmp/`、`.tools/` 及 `work/` 内上游参考源码）；按
+   `github.png` 步骤 `git init` → `commit` → `branch -M main` →
+   `remote add origin https://github.com/qxFly/qxfly-aod.git` →
+   `push -u origin main`，首提交 `662117f`（60 个文件）。
+
 ### 2026-11-18 第十三轮（滑条数值可输入 + 首页副标题删除 + SuperLyric 接入状态）
 
 1. **滑条数值手动输入 + 恢复默认（UI，真机验证）**：
@@ -1202,7 +1257,7 @@ module/
     │   ├── MiuixAppRoot.kt            ← Compose 根 + 底栏导航
     │   ├── base/                      ← MiuixPage / GlassBar
     │   ├── core/                      ← AppSettings / ModuleData / Theme
-    │   └── pages/                     ← HomePage / SettingsPage / StyleEditor / AboutPage
+    │   └── pages/                     ← HomePage / StylePage / SettingsPage / StyleEditor / AboutPage
     └── resources/META-INF/xposed/
         ├── module.prop                ← 版本号由 build.ps1 自动同步
         ├── scope.list                 ← com.miui.aod
