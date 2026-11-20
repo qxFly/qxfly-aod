@@ -13,14 +13,6 @@ import android.widget.TextView;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
-import com.hchen.superlyricapi.LyricListener;
-import com.hchen.superlyricapi.LyricView;
-import com.hchen.superlyricapi.Receiver;
-import com.hchen.superlyricapi.SuperLyric;
-import com.hchen.superlyricapi.model.Line;
-import com.hchen.superlyricapi.model.Lyric;
-import com.hchen.superlyricapi.model.Stop;
-
 import cn.qxfly.aod.ui.core.CardsData;
 import cn.qxfly.aod.ui.core.ModuleData;
 import cn.qxfly.aod.ui.core.UiHub;
@@ -46,14 +38,12 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
     private ContentResolver mResolver;
     @Nullable
     private StateObserver mObserver;
-    private boolean mLyricRegistered;
     /** SuperLyric 接入状态：null=尚未注册，true=已接入，false=失败/不可用。 */
     @Nullable
     private volatile Boolean mSuperLyricOk;
     /** 接入详情文本（"API 4" / "旧版协议" / 失败原因）。 */
     @NonNull
     private volatile String mSuperLyricDetail = "";
-    private final AppReporter mAppReporter = new AppReporter();
 
     @Nullable
     private ModuleData mHub;
@@ -110,7 +100,16 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
         mObserver = new StateObserver(new Handler(Looper.getMainLooper()));
         mResolver.registerContentObserver(StateKeys.stateUri(), true, mObserver);
         refreshState();
-        registerLyricPublisher();
+        // The publisher also registers from Application.onCreate; this call is
+        // the belt-and-braces path for processes started before the upgrade.
+        LyricPublisher.get().ensureRegistered(this);
+        syncPublisherState();
+    }
+
+    /** Mirrors the process-wide publisher state into the UI fields. */
+    private void syncPublisherState() {
+        mSuperLyricOk = LyricPublisher.get().ok();
+        mSuperLyricDetail = LyricPublisher.get().detail();
     }
 
     /**
@@ -177,6 +176,7 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
         // frozen (hook process re-enumeration after an AOD-style change,
         // heartbeat updates) is silently missed. Re-read the provider every
         // time the user comes back to the app.
+        syncPublisherState();
         refreshState();
     }
 
@@ -186,73 +186,9 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
         if (mObserver != null) {
             mResolver.unregisterContentObserver(mObserver);
         }
-        if (mLyricRegistered) {
-            SuperLyric.receiver().unregisterAll();
-            mLyricRegistered = false;
-        }
-    }
-
-    /**
-     * Registers the SuperLyric stream used to publish lyrics to the provider.
-     *
-     * <p>This is the ONLY lyric source with full LRC payloads (the app carries
-     * superlyricapi_version_code=40), so it must keep running even though the
-     * app no longer shows a "now playing" card.
-     */
-    private void registerLyricPublisher() {
-        try {
-            Receiver.RegisterResult result = SuperLyric.receiver().register(new LyricListener() {
-                @Override
-                public void onLyric(LyricView view) {
-                    Lyric doc = view.getLyric();
-                    Line line = view.getLine();
-                    try {
-                        mAppReporter.publishLyric(doc, LrcBuilder.build(doc),
-                                line == null ? null : line.getText(),
-                                line == null ? null : line.getTranslation());
-                    } catch (Throwable t) {
-                        AodLog.w("publishLyric crashed: " + t);
-                    }
-                }
-
-                @Override
-                public void onStop(Stop stop) {
-                    // Clear the provider's lyric record (line, translation and
-                    // full LRC): the app is the only full-LRC publisher, so a
-                    // stop MUST wipe LYRIC_LRC here or the AOD keeps the last
-                    // song's lyrics after the player stops (ghost lyrics bug).
-                    try {
-                        mAppReporter.publishStop();
-                    } catch (Throwable t) {
-                        AodLog.w("publishStop crashed: " + t);
-                    }
-                    AodLog.i("SuperLyric stopped: " + stop.getReason());
-                }
-            });
-            mLyricRegistered = result == Receiver.RegisterResult.OK;
-            int slApi = -1;
-            try {
-                slApi = SuperLyric.serverApiVersion();
-            } catch (Throwable ignored) {
-            }
-            mSuperLyricOk = mLyricRegistered;
-            mSuperLyricDetail = slApi > 0
-                    ? "API " + slApi
-                    : (mLyricRegistered ? "旧版协议" : result.name());
-            AodLog.i("SuperLyric registered: " + result.name()
-                    + " serverApiVersion=" + slApi + " available=" + SuperLyric.isAvailable());
-        } catch (Throwable t) {
-            mSuperLyricOk = Boolean.FALSE;
-            try {
-                mSuperLyricDetail = SuperLyric.isAvailable()
-                        ? t.getClass().getSimpleName() : "未安装或未启用";
-            } catch (Throwable ignored) {
-                mSuperLyricDetail = t.getClass().getSimpleName();
-            }
-            AodLog.w("SuperLyric registration failed: " + t);
-        }
-        // Republish so the status card shows the fresh SuperLyric state.
-        refreshState();
+        // The SuperLyric publisher intentionally stays registered for the life
+        // of the process (see LyricPublisher): unregistering here used to drop
+        // the only full-LRC source as soon as the activity was destroyed.
     }
 
     private void refreshState() {
@@ -267,6 +203,7 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
     }
 
     private void refreshStateInner() {
+        syncPublisherState();
         Bundle snap = null;
         try {
             snap = mResolver.call(StateKeys.stateUri(), StateKeys.METHOD_GET, null, null);

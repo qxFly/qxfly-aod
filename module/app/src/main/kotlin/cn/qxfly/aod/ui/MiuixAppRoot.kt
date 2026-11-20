@@ -27,6 +27,7 @@ import cn.qxfly.aod.ui.core.ModuleData
 import cn.qxfly.aod.ui.core.MiuixAppTheme
 import cn.qxfly.aod.ui.core.Route
 import cn.qxfly.aod.ui.pages.AboutPage
+import cn.qxfly.aod.ui.pages.DiagnosticsPage
 import cn.qxfly.aod.ui.pages.HomePage
 import cn.qxfly.aod.ui.pages.SettingsPage
 import cn.qxfly.aod.ui.pages.StylePage
@@ -99,6 +100,7 @@ fun MiuixAppRoot(
                             entry<Route.Style> { StylePage(bottomPadding) }
                             entry<Route.Settings> { SettingsPage(bottomPadding) }
                             entry<Route.About> { AboutPage(bottomPadding) }
+                            entry<Route.Diagnostics> { DiagnosticsPage(bottomPadding) }
                         }
                     }
                 }

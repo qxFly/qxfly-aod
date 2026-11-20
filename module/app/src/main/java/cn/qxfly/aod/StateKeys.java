@@ -20,11 +20,26 @@ public final class StateKeys {
     public static final String AUTHORITY = "cn.qxfly.aod.state";
     public static final String PATH_STATE = "state";
 
+    /**
+     * Snapshot schema version. Bumped whenever a key is renamed or removed so
+     * the provider can drop stale records instead of carrying them forever
+     * (e.g. the long-dead {@code styleShadowRadius}).
+     */
+    public static final String SCHEMA = "schema";
+    public static final int SCHEMA_VERSION = 2;
+
+    /** Keys that older builds wrote and nothing reads any more. */
+    public static final String[] OBSOLETE_KEYS = {
+            "styleShadowRadius",
+    };
+
     /** Path segment serving the imported custom font file. */
     public static final String PATH_FONT = "font";
     public static final String METHOD_UPDATE = "update";
     public static final String METHOD_GET = "get";
     public static final String METHOD_CLEAR = "clear";
+    /** UI -> provider: ask every hook process to push its log tail. */
+    public static final String METHOD_DIAG_REQUEST = "diagRequest";
 
     public static final String TYPE = "type";
     public static final String TYPE_MODULE = "module";
@@ -32,10 +47,15 @@ public final class StateKeys {
     public static final String TYPE_LYRIC = "lyric";
     public static final String TYPE_STYLE = "style";
     /** Hook -> app: enumerated AOD components with bounds (anchor picker data). */
-    public static final String TYPE_COMPONENTS = "components";
-    /** "id|class|bounds" lines, one per candidate component. */
+    public static final String TYPE_COMPONENTS = "components";    /** "id|class|bounds" lines, one per candidate component. */
     public static final String COMPONENTS_LIST = "componentsList";
     public static final String COMPONENTS_AT = "componentsAt";
+
+    /** Hook -> app: diagnostics answer (log tail + build identity). */
+    public static final String TYPE_DIAG = "diag";
+    public static final String LOG_BUILD = "logBuild";
+    public static final String LOG_PROCESS = "logProcess";
+    public static final String LOG_AT = "logAt";
 
     // ---- module ----
     /**
@@ -47,6 +67,8 @@ public final class StateKeys {
     public static final String MODULE_API = "moduleApi";
     public static final String MODULE_FRAMEWORK = "moduleFramework";
     public static final String MODULE_READY_AT = "moduleReadyAt";
+    /** true = hook processes record DEBUG lines too (diagnostics switch). */
+    public static final String LOG_DEBUG = "logDebug";
 
     // ---- status ----
     public static final String HOOKS_INSTALLED = "hooksInstalled";
@@ -68,6 +90,37 @@ public final class StateKeys {
      */
     public static final String LYRIC_LRC = "lyricLrc";
     public static final String LYRIC_ID = "lyricId";
+
+    // ---- now playing metadata (published by the UI app's v4 stream) ----
+    /** Song title, as reported by the publisher. */
+    public static final String LYRIC_TITLE = "lyricTitle";
+    /** Artist / singer. */
+    public static final String LYRIC_ARTIST = "lyricArtist";
+    /** Text of the line AFTER the current one, for the "next line" preview. */
+    public static final String LYRIC_NEXT = "lyricNext";
+    /** Playback position in ms at the instant {@link #LYRIC_POS_AT} was taken. */
+    public static final String LYRIC_POSITION = "lyricPosition";
+    /** Track duration in ms (0 / absent = unknown). */
+    public static final String LYRIC_DURATION = "lyricDuration";
+    /** Wall clock of the position sample: SystemClock.elapsedRealtime(). */
+    public static final String LYRIC_POS_AT = "lyricPosAt";
+    /** playing / paused / buffering / stopped. */
+    public static final String LYRIC_PLAY_STATE = "lyricPlayState";
+
+    /** Play-state values for {@link #LYRIC_PLAY_STATE}. */
+    public static final String PLAY_PLAYING = "playing";
+    public static final String PLAY_PAUSED = "paused";
+    public static final String PLAY_BUFFERING = "buffering";
+    public static final String PLAY_STOPPED = "stopped";
+
+    /**
+     * Diagnostics handshake: the UI bumps this counter, the hook processes
+     * notice the change on their next poll and push a fresh status report
+     * (including their log tail) back into the same snapshot.
+     */
+    public static final String DIAG_REQUEST = "diagRequest";
+    /** Last N log lines from the hook process (newline separated). */
+    public static final String LOG_TAIL = "logTail";
 
     // ---- appearance (mirrors the original module's customisation) ----
     /** Text size in sp. */
@@ -125,6 +178,16 @@ public final class StateKeys {
     /** Background opacity multiplier, 0..1. */
     public static final String STYLE_BG_ALPHA = "styleBgAlpha";
 
+    // ---- extra lines around the lyric ----
+    /** true = show "title - artist" above the lyric. */
+    public static final String STYLE_SHOW_TRACK = "styleShowTrack";
+    /** true = show the next line below the lyric (dimmed). */
+    public static final String STYLE_SHOW_NEXT = "styleShowNext";
+    /** true = show the playback position/duration under the lyric. */
+    public static final String STYLE_SHOW_PROGRESS = "styleShowProgress";
+    /** true = keep the current line visible (dimmed) while playback is paused. */
+    public static final String STYLE_PAUSE_KEEP = "stylePauseKeep";
+
     /**
      * Live translation of the current line, pushed alongside {@link #LYRIC_LINE}.
      * Not a style key: it changes with every line.
@@ -139,6 +202,7 @@ public final class StateKeys {
             STYLE_ANCHOR_ID, STYLE_ANCHOR_POS, STYLE_ANCHOR_GAP, STYLE_TREE_INSERT,
             STYLE_SHOW_TRANSLATION, STYLE_FONT_STAMP,
             STYLE_BG_ENABLED, STYLE_BG_COLOR, STYLE_BG_ALPHA,
+            STYLE_SHOW_TRACK, STYLE_SHOW_NEXT, STYLE_SHOW_PROGRESS, STYLE_PAUSE_KEEP,
     };
 
     public static android.net.Uri stateUri() {

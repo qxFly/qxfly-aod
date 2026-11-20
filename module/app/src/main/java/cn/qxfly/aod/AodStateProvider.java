@@ -48,13 +48,25 @@ public final class AodStateProvider extends ContentProvider {
             switch (method) {
                 case StateKeys.METHOD_UPDATE:
                     if (extras != null) {
-                        apply(extras);
-                        persist();
+                        boolean durable = apply(extras);
+                        // Lyric/log records are explicitly NOT reloaded on start
+                        // (they caused ghost lyrics after a reboot), so writing
+                        // them to disk was pure waste: the app process used to
+                        // rewrite the whole snapshot file once per line and once
+                        // per position tick (~1 write/s while music played).
+                        if (durable) {
+                            persist();
+                        }
                         notifyChanged();
                     }
                     return null;
                 case StateKeys.METHOD_GET:
                     return snapshot();
+                case StateKeys.METHOD_DIAG_REQUEST:
+                    sSnapshot.putString(StateKeys.DIAG_REQUEST, arg != null
+                            ? arg : String.valueOf(System.currentTimeMillis()));
+                    notifyChanged();
+                    return null;
                 case StateKeys.METHOD_CLEAR:
                     sSnapshot = new Bundle();
                     persist();
@@ -100,10 +112,19 @@ public final class AodStateProvider extends ContentProvider {
         throw new java.io.FileNotFoundException(uri.toString());
     }
 
-    private static void apply(@NonNull Bundle in) {
+    /**
+     * Merges one report into the snapshot.
+     *
+     * @return true when the update touched state that survives a process
+     *         restart (i.e. must be written to disk). Lyric and diagnostics
+     *         records return false: they are never reloaded, so persisting them
+     *         was a per-second file write for nothing.
+     */
+    private static boolean apply(@NonNull Bundle in) {
         Bundle next = new Bundle(snapshot());
         String type = in.getString(StateKeys.TYPE);
         long now = System.currentTimeMillis();
+        boolean durable = true;
 
         if (StateKeys.TYPE_MODULE.equals(type)) {
             // copyIfPresent (not putString): a master-switch write carries only
@@ -117,6 +138,9 @@ public final class AodStateProvider extends ContentProvider {
             if (in.containsKey(StateKeys.MODULE_ENABLED)) {
                 next.putBoolean(StateKeys.MODULE_ENABLED,
                         in.getBoolean(StateKeys.MODULE_ENABLED));
+            }
+            if (in.containsKey(StateKeys.LOG_DEBUG)) {
+                next.putBoolean(StateKeys.LOG_DEBUG, in.getBoolean(StateKeys.LOG_DEBUG));
             }
             next.putLong(StateKeys.MODULE_READY_AT, now);
         } else if (StateKeys.TYPE_STATUS.equals(type)) {
@@ -134,16 +158,34 @@ public final class AodStateProvider extends ContentProvider {
             copyIfPresent(next, in, StateKeys.LYRIC_CHARS);
             copyIfPresent(next, in, StateKeys.LYRIC_LRC);
             copyIfPresent(next, in, StateKeys.LYRIC_ID);
+            copyIfPresent(next, in, StateKeys.LYRIC_TITLE);
+            copyIfPresent(next, in, StateKeys.LYRIC_ARTIST);
+            copyIfPresent(next, in, StateKeys.LYRIC_NEXT);
+            copyIfPresent(next, in, StateKeys.LYRIC_POSITION);
+            copyIfPresent(next, in, StateKeys.LYRIC_POS_AT);
+            copyIfPresent(next, in, StateKeys.LYRIC_DURATION);
+            copyIfPresent(next, in, StateKeys.LYRIC_PLAY_STATE);
             next.putLong(StateKeys.LYRIC_AT, now);
+            durable = false;
         } else if (StateKeys.TYPE_STYLE.equals(type)) {
             for (String key : StateKeys.STYLE_KEYS) {
                 copyIfPresent(next, in, key);
             }
+        } else if (StateKeys.TYPE_DIAG.equals(type)) {
+            // Hook -> app diagnostics answer: the log tail of the process that
+            // served the request, plus its build identity.
+            copyIfPresent(next, in, StateKeys.LOG_TAIL);
+            copyIfPresent(next, in, StateKeys.LOG_BUILD);
+            copyIfPresent(next, in, StateKeys.LOG_PROCESS);
+            next.putLong(StateKeys.LOG_AT, now);
+            durable = false;
         } else if (StateKeys.TYPE_COMPONENTS.equals(type)) {
             copyIfPresent(next, in, StateKeys.COMPONENTS_LIST);
             copyIfPresent(next, in, StateKeys.COMPONENTS_AT);
         }
+        next.putString(StateKeys.SCHEMA, String.valueOf(StateKeys.SCHEMA_VERSION));
         sSnapshot = next;
+        return durable;
     }
 
     private static void copyIfPresent(@NonNull Bundle out, @NonNull Bundle in, String key) {
@@ -151,6 +193,16 @@ public final class AodStateProvider extends ContentProvider {
         if (value != null) {
             out.putString(key, value);
         }
+    }
+
+    /** True for keys from older schemas that nothing reads any more. */
+    private static boolean isObsolete(@NonNull String key) {
+        for (String dead : StateKeys.OBSOLETE_KEYS) {
+            if (dead.equals(key)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static Bundle snapshot() {
@@ -214,8 +266,12 @@ public final class AodStateProvider extends ContentProvider {
                 // reloading LYRIC_LINE/LYRIC_LRC resurrected the last song's
                 // lyrics on the AOD after a reboot with nothing playing - the
                 // "ghost lyrics" bug. Settings (module/style/status) still
-                // persist, which is what loadPersisted exists for.
-                if (parts[1].startsWith("lyric")) {
+                // persist, which is what loadPersisted exists for. Log tails are
+                // transient for the same reason.
+                if (parts[1].startsWith("lyric") || parts[1].startsWith("log")) {
+                    continue;
+                }
+                if (isObsolete(parts[1])) {
                     continue;
                 }
                 if ("S".equals(parts[0])) {
@@ -227,6 +283,12 @@ public final class AodStateProvider extends ContentProvider {
                     loaded.putLong(parts[1], Long.parseLong(parts[2]));
                 }
             }
+            // Schema migration: drop keys from older builds that nothing reads
+            // any more, and stamp the current version.
+            for (String dead : StateKeys.OBSOLETE_KEYS) {
+                loaded.remove(dead);
+            }
+            loaded.putString(StateKeys.SCHEMA, String.valueOf(StateKeys.SCHEMA_VERSION));
             sSnapshot = loaded;
             android.util.Log.i(AodLyricModule.TAG,
                     "state loaded from disk: " + loaded.size() + " keys");

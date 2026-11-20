@@ -1,19 +1,31 @@
 package cn.qxfly.aod.ui.pages
 
 import android.os.Build
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import cn.qxfly.aod.KeepAliveService
 import cn.qxfly.aod.R
 import cn.qxfly.aod.ui.base.MiuixPage
 import cn.qxfly.aod.ui.core.LocalAppSettings
+import cn.qxfly.aod.ui.core.LocalNavigator
+import cn.qxfly.aod.ui.core.Route
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.preference.OverlayDropdownPreference
@@ -100,7 +112,7 @@ fun SettingsPage(bottomPadding: Dp) {
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp),
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
             ) {
                 SwitchPreference(
                     title = stringResource(R.string.settings_monet),
@@ -157,6 +169,88 @@ fun SettingsPage(bottomPadding: Dp) {
                     },
                 )
             }
+        }
+
+        item { SmallTitle(text = stringResource(R.string.settings_section_service)) }
+        item {
+            val context = LocalContext.current
+            var keepAlive by remember { mutableStateOf(KeepAliveService.isEnabled(context)) }
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
+            ) {
+                SwitchPreference(
+                    title = stringResource(R.string.settings_keepalive),
+                    summary = stringResource(R.string.settings_keepalive_summary),
+                    checked = keepAlive,
+                    onCheckedChange = { enabled ->
+                        keepAlive = enabled
+                        KeepAliveService.setEnabled(context, enabled)
+                    },
+                )
+                ActionRow(
+                    title = stringResource(R.string.settings_battery),
+                    summary = stringResource(R.string.settings_battery_summary),
+                ) {
+                    val ok = runCatching {
+                        context.startActivity(
+                            android.content.Intent(
+                                android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                android.net.Uri.parse("package:" + context.packageName),
+                            ),
+                        )
+                        true
+                    }.getOrDefault(false)
+                    if (!ok) {
+                        android.widget.Toast.makeText(
+                            context,
+                            context.getString(R.string.settings_battery_unavailable),
+                            android.widget.Toast.LENGTH_SHORT,
+                        ).show()
+                    }
+                }
+            }
+        }
+
+        item {
+            val navigator = LocalNavigator.current
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+            ) {
+                ActionRow(
+                    title = stringResource(R.string.diag_title),
+                    summary = stringResource(R.string.diag_subtitle),
+                ) { navigator.push(Route.Diagnostics) }
+            }
+        }
+    }
+}
+
+/** 可点击的双行设置项：标题 + 说明，整行响应。 */
+@Composable
+private fun ActionRow(
+    title: String,
+    summary: String,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, fontSize = 15.sp)
+            Text(
+                text = summary,
+                fontSize = 12.sp,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            )
         }
     }
 }

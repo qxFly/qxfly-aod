@@ -31,6 +31,10 @@ sealed interface Route : NavKey {
 
     @Serializable
     data object About : Route
+
+    /** 诊断页（从设置页压栈进入）。 */
+    @Serializable
+    data object Diagnostics : Route
 }
 
 /** 标签根路由（与底部导航一一对应）。 */

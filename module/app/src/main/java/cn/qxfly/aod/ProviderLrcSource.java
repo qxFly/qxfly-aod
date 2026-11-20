@@ -12,7 +12,8 @@ import androidx.annotation.Nullable;
  * <p>Why this exists: SuperLyric's legacy transport (serverApiVersion=0) grants
  * full payloads only to clients whose manifest declares superlyricapi_version_code
  * >= 35. com.miui.aod has no such meta, so its stream carries only the current
- * line. The UI app, holding version 40, receives everything and publishes it
+ * line. The UI app, holding version 40, receives everything (line, translation,
+ * next line, position, duration, play state, title/artist) and publishes it
  * here; the hook processes read it back.
  *
  * <p>The Context is resolved on every call instead of being captured in the
@@ -36,16 +37,40 @@ public final class ProviderLrcSource {
     @Nullable
     private volatile String mTranslation;
 
+    /** Next line text, for the "next line" preview. */
+    @Nullable
+    private volatile String mNext;
+
+    @Nullable
+    private volatile String mTitle;
+
+    @Nullable
+    private volatile String mArtist;
+
+    /** Position sample in ms and the clock it was taken at. */
+    private volatile long mPositionMs;
+    private volatile long mPositionAt;
+    private volatile long mDurationMs;
+    /** playing / paused / buffering / stopped ("" = unknown). */
+    @NonNull
+    private volatile String mPlayState = "";
+
     /** Master switch mirrored from the provider snapshot (default: on). */
     private volatile boolean mModuleEnabled = true;
 
     /** When the provider last received a lyric feed (0 = never). */
     private volatile long mLyricAt;
 
+    /** Last diagnostics handshake value seen, so the hook reports only once. */
+    private volatile String mDiagRequest;
+
     /** A lyric feed older than this is considered dead: no stop event ever
      *  arrives when a player is killed, so this is the only way to clear the
      *  overlay. Generous enough that a slow UI-app refresh never trips it. */
     public static final long STALE_MS = 180_000L;
+
+    /** Paused playback may legitimately be silent for a long time. */
+    public static final long PAUSED_STALE_MS = 30 * 60_000L;
 
     @Nullable
     public String translation() {
@@ -60,7 +85,7 @@ public final class ProviderLrcSource {
 
     private volatile boolean sWarnedNoContext;
 
-    /** Pulls the latest snapshot from the provider. Cheap binder call. */
+    /** Pulls the latest snapshot from the provider. One binder call. */
     public void refresh() {
         Context context = resolveContext();
         if (context == null) {
@@ -98,6 +123,14 @@ public final class ProviderLrcSource {
             if (track != null) {
                 mTrack = track;
             }
+            String title = snap.getString(StateKeys.LYRIC_TITLE);
+            if (title != null) {
+                mTitle = title;
+            }
+            String artist = snap.getString(StateKeys.LYRIC_ARTIST);
+            if (artist != null) {
+                mArtist = artist;
+            }
             String line = snap.getString(StateKeys.LYRIC_LINE);
             // Empty = playback stopped: clear instead of keeping the stale line.
             mLine = line == null || line.isEmpty() ? null : line;
@@ -105,8 +138,23 @@ public final class ProviderLrcSource {
             // Translating line rides in the same snapshot; absent/empty = none.
             mTranslation = translation == null || translation.isEmpty()
                     ? null : translation;
+            String next = snap.getString(StateKeys.LYRIC_NEXT);
+            mNext = next == null || next.isEmpty() ? null : next;
+
+            long position = parseLong(snap.getString(StateKeys.LYRIC_POSITION), -1L);
+            long posAt = parseLong(snap.getString(StateKeys.LYRIC_POS_AT), 0L);
+            if (position >= 0 && posAt > 0) {
+                mPositionMs = position;
+                mPositionAt = posAt;
+            }
+            mDurationMs = parseLong(snap.getString(StateKeys.LYRIC_DURATION), 0L);
+            String state = snap.getString(StateKeys.LYRIC_PLAY_STATE);
+            mPlayState = state == null ? "" : state;
+
             mLyricAt = snap.getLong(StateKeys.LYRIC_AT, 0);
             mModuleEnabled = snap.getBoolean(StateKeys.MODULE_ENABLED, true);
+            AodLog.setDebug(snap.getBoolean(StateKeys.LOG_DEBUG, false));
+            mDiagRequest = snap.getString(StateKeys.DIAG_REQUEST);
             // Appearance settings ride in the same snapshot; apply on change.
             Bundle style = new Bundle();
             boolean hasStyle = false;
@@ -118,28 +166,7 @@ public final class ProviderLrcSource {
                 }
             }
             if (hasStyle) {
-                // Include the placement keys: a new anchor / ratio / gap must
-                // retrigger setStyle, which re-applies the offset.
-                String stamp = style.getString(StateKeys.STYLE_TEXT_SIZE) + "|"
-                        + style.getString(StateKeys.STYLE_TEXT_COLOR) + "|"
-                        + style.getString(StateKeys.STYLE_TYPEFACE) + "|"
-                        + style.getString(StateKeys.STYLE_STROKE_WIDTH) + "|"
-                        + style.getString(StateKeys.STYLE_STROKE_COLOR) + "|"
-                        + style.getString(StateKeys.STYLE_WEIGHT) + "|"
-                        + style.getString(StateKeys.STYLE_ITALIC) + "|"
-                        + style.getString(StateKeys.STYLE_OFFSET_RATIO) + "|"
-                        + style.getString(StateKeys.STYLE_ALIGN) + "|"
-                        + style.getString(StateKeys.STYLE_ANCHOR_ID) + "|"
-                        + style.getString(StateKeys.STYLE_ANCHOR_POS) + "|"
-                        + style.getString(StateKeys.STYLE_ANCHOR_GAP) + "|"
-                        + style.getString(StateKeys.STYLE_TREE_INSERT) + "|"
-                        + style.getString(StateKeys.STYLE_SHOW_TRANSLATION) + "|"
-                        // Font re-imports keep typefaceName "custom": the stamp
-                        // marker is what makes the change visible.
-                        + style.getString(StateKeys.STYLE_FONT_STAMP) + "|"
-                        + style.getString(StateKeys.STYLE_BG_ENABLED) + "|"
-                        + style.getString(StateKeys.STYLE_BG_COLOR) + "|"
-                        + style.getString(StateKeys.STYLE_BG_ALPHA);
+                String stamp = styleStamp(style);
                 if (!stamp.equals(mStyleStamp)) {
                     mStyleStamp = stamp;
                     AodOverlayController.setStyle(style);
@@ -148,6 +175,31 @@ public final class ProviderLrcSource {
         } catch (Throwable t) {
             AodLog.w("provider refresh failed: " + t.getClass().getSimpleName()
                     + ": " + t.getMessage());
+        }
+    }
+
+    /**
+     * Change marker for the whole appearance bundle: every key that affects
+     * rendering is included, so a new toggle (track/next/progress/pause)
+     * retriggers {@code setStyle} exactly like the older keys did.
+     */
+    @NonNull
+    static String styleStamp(@NonNull Bundle style) {
+        StringBuilder sb = new StringBuilder();
+        for (String key : StateKeys.STYLE_KEYS) {
+            sb.append(style.getString(key)).append('|');
+        }
+        return sb.toString();
+    }
+
+    private static long parseLong(@Nullable String raw, long fallback) {
+        if (raw == null || raw.isEmpty()) {
+            return fallback;
+        }
+        try {
+            return Long.parseLong(raw);
+        } catch (Throwable t) {
+            return fallback;
         }
     }
 
@@ -187,6 +239,58 @@ public final class ProviderLrcSource {
         return mTrack;
     }
 
+    @Nullable
+    public String title() {
+        return mTitle;
+    }
+
+    @Nullable
+    public String artist() {
+        return mArtist;
+    }
+
+    @Nullable
+    public String nextLine() {
+        return mNext;
+    }
+
+    /** True when the publisher reported playing (or said nothing at all). */
+    public boolean playing() {
+        return mPlayState.isEmpty() || StateKeys.PLAY_PLAYING.equals(mPlayState);
+    }
+
+    public boolean paused() {
+        return StateKeys.PLAY_PAUSED.equals(mPlayState);
+    }
+
+    /**
+     * Extrapolated playback position: the sample plus the time elapsed since
+     * it was taken, clamped to the track duration. Returns -1 when unknown.
+     */
+    public long positionNow() {
+        if (mPositionAt <= 0) {
+            return -1L;
+        }
+        long pos = mPositionMs;
+        if (playing()) {
+            pos += Math.max(0L, android.os.SystemClock.elapsedRealtime() - mPositionAt);
+        }
+        if (mDurationMs > 0 && pos > mDurationMs) {
+            pos = mDurationMs;
+        }
+        return pos;
+    }
+
+    /** Track duration in ms, or 0 when unknown. */
+    public long duration() {
+        return mDurationMs;
+    }
+
+    @Nullable
+    public String playState() {
+        return mPlayState;
+    }
+
     /** Master switch as mirrored from the last refresh (default: on). */
     public boolean moduleEnabled() {
         return mModuleEnabled;
@@ -197,14 +301,27 @@ public final class ProviderLrcSource {
         return mLyricAt;
     }
 
+    /** Current diagnostics handshake value ("" when never requested). */
+    @Nullable
+    public String diagRequest() {
+        return mDiagRequest;
+    }
+
     /**
      * True when no lyric feed arrived within {@link #STALE_MS}. Players killed
      * outright never deliver a stop event, so this watchdog is what eventually
      * clears the overlay; the next feed un-stales it (self-healing).
+     *
+     * <p>Paused playback is exempt for a much longer window: a paused track can
+     * sit there for hours and the line must stay on screen.
      */
     public boolean isStale() {
         long at = mLyricAt;
-        return at > 0 && System.currentTimeMillis() - at > STALE_MS;
+        if (at <= 0) {
+            return false;
+        }
+        long age = System.currentTimeMillis() - at;
+        return age > (paused() ? PAUSED_STALE_MS : STALE_MS);
     }
 
     /**
@@ -226,5 +343,13 @@ public final class ProviderLrcSource {
             return null;
         }
         return mTranslation;
+    }
+
+    @Nullable
+    public String displayNext() {
+        if (!mModuleEnabled || isStale()) {
+            return null;
+        }
+        return mNext;
     }
 }

@@ -55,6 +55,33 @@ public final class SuperLyricSource {
     @Nullable
     private volatile String mCurrentArtist;
 
+    @Nullable
+    private volatile String mTitle;
+
+    @Nullable
+    private volatile String mArtist;
+
+    @Nullable
+    private volatile String mNext;
+
+    /** Raw song title (not the combined label). */
+    @Nullable
+    public String title() {
+        return mTitle;
+    }
+
+    /** Raw artist name. */
+    @Nullable
+    public String artist() {
+        return mArtist;
+    }
+
+    /** Next line text, when the payload carries a full document. */
+    @Nullable
+    public String nextLine() {
+        return mNext;
+    }
+
     private volatile boolean mRegistered;
 
     /** When this process's own SuperLyric stream last delivered anything
@@ -90,6 +117,12 @@ public final class SuperLyricSource {
                 mCurrentLrc = lrc;
                 mCurrentTitle = doc == null ? null : doc.getTitle();
                 mCurrentArtist = doc == null ? null : doc.getArtist();
+                if (doc != null) {
+                    mTitle = doc.getTitle();
+                    mArtist = doc.getArtist();
+                }
+                mNext = upcomingText(view);
+                LyricBridge.markDirty();
 
                 com.hchen.superlyricapi.model.Line line = view.getLine();
                 // INFO level: this log is the discriminator between "full doc
@@ -153,14 +186,29 @@ public final class SuperLyricSource {
                 mCurrentLine = text;
                 mCurrentTranslation = translation;
                 if (title != null && !title.isEmpty()) {
+                    mTitle = title;
+                    mArtist = artist;
                     mCurrentTitle = artist == null || artist.isEmpty()
                             ? title : artist + " - " + title;
                 }
                 // Direct to the AOD overlay in this process...
-                AodOverlayController.setText(text, translation);
+                LyricBridge.markDirty();
                 // ...and to the app UI through the provider.
                 mReporter.reportLyric(mCurrentTitle, text, translation,
                         "-1", "0", "0");
+            }
+
+            @Override
+            public void onMeta(@Nullable String title, @Nullable String artist,
+                               @Nullable String next, int index, int total) {
+                if (title != null && !title.isEmpty()) {
+                    mTitle = title;
+                    mArtist = artist;
+                }
+                if (next != null) {
+                    mNext = next;
+                }
+                LyricBridge.markDirty();
             }
 
             @Override
@@ -183,9 +231,27 @@ public final class SuperLyricSource {
         }
     }
 
+    /** First non-empty upcoming line of a v4 view, or null. */
     @Nullable
-    private static String trackLabel(@Nullable Lyric doc) {
-        if (doc == null) {
+    private static String upcomingText(@NonNull LyricView view) {
+        try {
+            java.util.List<com.hchen.superlyricapi.model.Line> upcoming = view.getUpcoming();
+            if (upcoming == null) {
+                return null;
+            }
+            for (com.hchen.superlyricapi.model.Line line : upcoming) {
+                if (line != null && line.getText() != null
+                        && !line.getText().trim().isEmpty()) {
+                    return line.getText();
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
+    @Nullable
+    private static String trackLabel(@Nullable Lyric doc) {        if (doc == null) {
             return null;
         }
         String title = doc.getTitle();

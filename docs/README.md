@@ -50,6 +50,67 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1 -Clean
 未完成第 3 步时表现是：App 能开，但 `adb logcat -s AodLyric` 一行输出都没有
 （Hook 根本没被加载），息屏不显示歌词。旧包的样式设置随卸载丢失，需重新保存一次歌词外观。
 
+## 8.1.0：可靠性 / 性能 / 信息量（本轮）
+
+### 后台可靠性
+
+| 问题 | 现象 | 处理 |
+|---|---|---|
+| 完整歌词来源随 Activity 死亡 | 关掉 App 后只剩单行歌词（legacy 传输不带全文） | `LyricPublisher` 提到 `Application`：进程活着就保持注册，`onDestroy` 不再 `unregisterAll` |
+| HyperOS 冻结后台进程 | 息屏歌词偶发不刷新 | 新增可选的 `KeepAliveService` 前台服务（默认关闭），设置页可开；另提供「忽略电池优化」入口 |
+
+### 主线程负载
+
+* **Kicker 降载**：原来每 1 秒在主线程做一次完整结构性重建（`reinflate` + `forceTraversal`）。
+  现在改为分档：内容变化后 4 秒内保持 1 秒一次，之后每 3 秒一次；等待中的脉冲会强制走重档。
+* **脉冲补发**：`requestPulse()` 在 4 秒节流窗口内不再直接丢弃，而是置 `sPulseWanted`，
+  由 kicker 在窗口打开的第一时间补发 —— 快歌不再出现「换了行但面板没刷新」。
+* **Provider 轮询自适应**：保留 1 秒 tick，但真正的 `content call` 只在
+  ContentObserver 标记脏 / 心跳到点（播放中 5s、AOD 可见 10s、否则 30s）时执行；
+  早期版本是两个宿主进程每秒各做一次 binder 调用，暂停时也一样。
+* **渲染签名不含进度**：进度是外推出来的，每秒都在变，把它算进变更标记等于每秒强制重绘一次。
+  现在只有开了「显示播放进度」才把位置纳入签名。
+* **状态快照不再秒级落盘**：歌词/日志记录重启后本来就被丢弃（防幽灵歌词），
+  却曾经每次更新都重写整个快照文件。现在只有设置类更新才持久化。
+
+### 新增的歌词信息
+
+外观页 → **附加信息**，四项均可独立开关：
+
+| 开关 | 效果 |
+|---|---|
+| 显示歌名与歌手 | 歌词上方一行，58% 字号、55% 透明度 |
+| 显示下一句 | 歌词下方淡色预览（`LyricView.getUpcoming()`） |
+| 显示播放进度 | `1:23 / 4:05`，暂停时追加 `⏸` |
+| 暂停时保留歌词 | 暂停时把当前行降到 55% 透明度保留，而不是消失 |
+
+数据来自 UI 进程的 v4 流（`title/artist/next/position/duration/playState`），
+经 `StateKeys` 新增字段传到两个宿主进程；`ProviderLrcSource` 按播放状态外推当前进度。
+
+### 其它
+
+* **样式预设**：极简 / 粗描边 / 胶囊底，只改观感不动锚点。
+* **导入导出**：SAF 选择文件，JSON 带 `format` + `version`，便于以后兼容。
+* **诊断页**：设置 → 诊断信息。展示跨进程快照、Hook 进程日志尾（点「请求 Hook 日志」
+  写 `diagRequest`，Hook 在下一次轮询把环形缓冲 30 行回传）、本机日志，一键复制。
+  另有「记录调试日志」开关，把 `AodLog.d` 打开。
+* **日志分级**：`AodLog` 增加环形缓冲（240 行）与 debug 级别；高频路径的
+  `AodLog.i` 降为 `d`，正常使用不再刷屏。
+* **快照 schema**：`schema=2`，`OBSOLETE_KEYS` 在加载时清掉历史死键。
+* **大文件拆分**：`AodOverlayController` 3013 → 2700 行，抽出
+  `AnchorIds`（锚点 id 折叠规则，纯逻辑）、`ComponentCollector`（组件树枚举）、
+  `MamlBridge`（MAML 反射 + 面板刷新杠杆）。
+* **JVM 测试**：`work/run-tests.ps1` 编译并运行 `module/test/java` 下的纯逻辑用例
+  （锚点映射 / LRC 生成 / 渲染签名），共 31 条断言，不引入 JUnit。
+* **LRC 转义修正**：原来先转义 `<` 再转义 `&`，把 `a<b` 变成 `&amp;lt;`，
+  面板于是显示字面量 `&lt;`。现在先 `&` 后 `<`，并有测试覆盖。
+
+新增构建检查（可选，不影响 APK）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\work\run-tests.ps1
+```
+
 ## 8.0.0：Miuix 界面（骨架合并）
 
 `miuix/` 下的 Miuix 模板骨架（Miuix 0.9.4 + Compose，Gradle 构建）已合并进主模块：
@@ -1330,24 +1391,33 @@ module/
     │   ├── AodLyricModule.java        ← libxposed 入口
     │   ├── LyricBridge.java           ← Hook 安装 + 热重载
     │   ├── AodOverlayController.java  ← 息屏歌词视图/组件树定位
+    │   ├── AnchorIds.java             ← 锚点 id 折叠规则（纯逻辑，有测试）
+    │   ├── ComponentCollector.java    ← 组件树枚举（锚点下拉数据）
+    │   ├── MamlBridge.java            ← MAML 反射 + 面板刷新杠杆
     │   ├── LyricStyle.java            ← 外观配置（字号/颜色/背景…）
+    │   ├── LyricDisplay.java          ← 一次渲染的完整模型（行/翻译/下一句/进度）
     │   ├── SuperLyricSource.java      ← SuperLyric 接收端
     │   ├── ProviderLrcSource.java     ← Provider LRC 来源
     │   ├── AodStateProvider.java      ← cn.qxfly.aod.state
     │   ├── LrcBuilder.java            ← Lyric → LRC
     │   ├── LyricTextView.java         ← 自绘歌词视图
     │   ├── StateKeys.java             ← Provider 字段名
+    │   ├── AodApplication.java        ← 进程入口：注册常驻歌词发布
+    │   ├── LyricPublisher.java        ← 进程级 SuperLyric 注册（唯一全文来源）
+    │   ├── KeepAliveService.java      ← 可选前台服务（默认关闭）
     │   ├── MainActivity.java          ← App 入口 + 数据中枢
-    │   └── …                          ← AodLog / Reporter / 字体 / 主题探测
+    │   └── …                          ← AodLog（含环形缓冲）/ Reporter / 字体 / 主题探测
     ├── kotlin/cn/qxfly/aod/ui/
     │   ├── MiuixAppRoot.kt            ← Compose 根 + 底栏导航
     │   ├── base/                      ← MiuixPage / GlassBar
     │   ├── core/                      ← AppSettings / ModuleData / Theme
-    │   └── pages/                     ← HomePage / StylePage / SettingsPage / StyleEditor / AboutPage
+    │   └── pages/                     ← HomePage / StylePage / SettingsPage / StyleEditor / AboutPage / DiagnosticsPage
     └── resources/META-INF/xposed/
         ├── module.prop                ← 版本号由 build.ps1 自动同步
         ├── scope.list                 ← com.miui.aod
         └── java_init.list
+module/test/java/cn/qxfly/aod/          ← 纯 JVM 测试（AllTests.main）
 work/                                  ← 工具链/打包辅助脚本（python/ps1）
+    └── run-tests.ps1                  ← 编译并运行上面的测试（无需 JUnit）
 .deps/                                 ← JDK21、Kotlin 2.4、SDK build-tools、AAR 资源
 ```

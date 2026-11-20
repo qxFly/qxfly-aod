@@ -85,9 +85,14 @@ public final class LyricBridge {
     }
 
     /**
-     * Polls the state provider for the UI app's full LRC. Polling (not
-     * ContentObserver) keeps this independent of binder notification quirks
-     * across processes; the payload is small and 2s is plenty for lyrics.
+     * Provider sync loop.
+     *
+     * <p>Changed in 7.5.0: a ContentObserver wakes this loop the moment the UI
+     * app writes a snapshot, so line changes no longer wait for the next poll.
+     * The loop itself is adaptive - 1s ticks, but the expensive binder call
+     * only runs when dirty or when the heartbeat is due (5s while a lyric is
+     * live, 30s otherwise). Before this, two host processes each did one
+     * {@code content call} per second forever, including on a paused/blank AOD.
      */
     private void startProviderPolling() {
         try {
@@ -99,23 +104,45 @@ public final class LyricBridge {
                 t.setDaemon(true);
                 return t;
             });
+            final int[] tick = {0};
             sPoller.scheduleWithFixedDelay(() -> {
                 try {
                     // Deferred module/status reports: retry here because the
                     // Application-creation anchors are unreliable in SystemUI.
                     ModuleReporter.flushPendingIfReady();
+                    tick[0]++;
                     ProviderLrcSource source = sProviderLrc;
                     if (source == null) {
                         return;
                     }
+                    Context ctx = currentContext();
+                    if (ctx != null) {
+                        ensureProviderObserver(ctx);
+                    }
+                    boolean dirty = sProviderDirty;
+                    sProviderDirty = false;
+                    long now = System.currentTimeMillis();
+                    long lastFeed = Math.max(source.lastFeedAt(),
+                            sActiveSource == null ? 0 : sActiveSource.lastEventAt());
+                    boolean live = lastFeed > 0 && now - lastFeed < 60_000L;
+                    int period = live ? 5 : (AodOverlayController.isAodVisible() ? 10 : 30);
+                    if (!dirty && tick[0] % period != 0) {
+                        return;
+                    }
                     source.refresh();
-                    // Prefer this process's own SuperLyric line: it arrives
-                    // directly from the service, while the provider copy depends
-                    // on the UI app process being alive.
-                    String local = sActiveSource == null ? null : sActiveSource.currentLine();
+
+                    // Diagnostics handshake: the UI bumped diagRequest, so push
+                    // this process's log tail back through the provider.
+                    String diag = source.diagRequest();
+                    if (diag != null && !diag.equals(sLastDiagRequest)) {
+                        sLastDiagRequest = diag;
+                        mReporter.reportDiagnostics(sHooksInstalled,
+                                "getString + parseLyric + overlay");
+                    }
+
                     if (!source.moduleEnabled()) {
-                        // Master switch off: force the overlay idle every round.
-                        AodOverlayController.setText("", null);
+                        // Master switch off: force the overlay idle.
+                        AodOverlayController.setLyric(null);
                         return;
                     }
                     // Watchdog: killed players never deliver a stop event, so a
@@ -124,27 +151,97 @@ public final class LyricBridge {
                     boolean stale = isStale(source);
                     if (stale) {
                         LyricBridge.requestForceEmptyLrc();
-                        AodOverlayController.setText("", null);
+                        AodOverlayController.setLyric(null);
                         return;
                     }
-                    if (local != null) {
-                        AodOverlayController.setText(local,
-                                sActiveSource == null ? null
-                                        : sActiveSource.currentTranslation());
-                    } else {
-                        AodOverlayController.setText(source.displayLine(),
-                                source.displayTranslation());
-                    }
+                    AodOverlayController.setLyric(buildDisplay(source));
                 } catch (Throwable t) {
                     // Never let the scheduled task die: an exception escaping
                     // here cancels all further executions silently.
                     AodLog.w("lyric poll iteration failed: " + t);
                 }
             }, 500, 1000, java.util.concurrent.TimeUnit.MILLISECONDS);
-            AodLog.i("provider LRC polling started (1s)");
+            AodLog.i("provider sync started (push + adaptive poll)");
         } catch (Throwable t) {
             AodLog.w("provider polling unavailable: " + t);
         }
+    }
+
+    /** UI-app snapshot changed: refresh on the next tick instead of waiting. */
+    private static volatile boolean sProviderDirty = true;
+
+    /** Called by the lyric sources when a new line/meta arrived in-process. */
+    static void markDirty() {
+        sProviderDirty = true;
+    }
+
+    private static volatile boolean sObserverRegistered;
+
+    @Nullable
+    private static volatile String sLastDiagRequest;
+
+    private static void ensureProviderObserver(@NonNull Context context) {
+        if (sObserverRegistered) {
+            return;
+        }
+        sObserverRegistered = true;
+        try {
+            context.getContentResolver().registerContentObserver(
+                    StateKeys.stateUri(), true,
+                    new android.database.ContentObserver(
+                            new android.os.Handler(android.os.Looper.getMainLooper())) {
+                        @Override
+                        public void onChange(boolean selfChange) {
+                            sProviderDirty = true;
+                        }
+                    });
+            AodLog.i("provider observer registered (push updates)");
+        } catch (Throwable t) {
+            AodLog.w("provider observer unavailable, polling only: " + t);
+        }
+    }
+
+    /**
+     * Combines the provider snapshot (authoritative: position/duration/state
+     * come from the UI app's v4 stream) with this process's own line stream
+     * (lowest latency, works even while the UI app is frozen).
+     */
+    @NonNull
+    private static LyricDisplay buildDisplay(@NonNull ProviderLrcSource source) {
+        LyricDisplay d = new LyricDisplay();
+        SuperLyricSource local = sActiveSource;
+        String localLine = local == null ? null : local.currentLine();
+        if (localLine != null && !localLine.isEmpty()) {
+            d.line = localLine;
+            d.translation = local.currentTranslation();
+            d.title = local.title();
+            d.artist = local.artist();
+            d.next = local.nextLine();
+        }
+        if (d.line == null) {
+            d.line = source.displayLine();
+            d.translation = source.displayTranslation();
+            d.title = source.title();
+            d.artist = source.artist();
+            d.next = source.displayNext();
+        }
+        if (d.next == null) {
+            d.next = source.displayNext();
+        }
+        if (d.title == null) {
+            d.title = source.title();
+        }
+        if (d.artist == null) {
+            d.artist = source.artist();
+        }
+        d.positionMs = source.positionNow();
+        d.durationMs = source.duration();
+        String state = source.playState();
+        d.paused = StateKeys.PLAY_PAUSED.equals(state);
+        d.playing = state == null || state.isEmpty()
+                || StateKeys.PLAY_PLAYING.equals(state)
+                || StateKeys.PLAY_BUFFERING.equals(state);
+        return d;
     }
 
     /**

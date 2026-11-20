@@ -132,6 +132,41 @@ public final class ModuleReporter {
         push(context(), b, "status");
     }
 
+    /**
+     * Answers a diagnostics request from the UI: pushes this process's log tail
+     * and build identity so the app can show what happened inside SystemUI /
+     * com.miui.aod without logcat access.
+     *
+     * <p>Also refreshes the status report, so a stale "hooksInstalled" is
+     * corrected at the same time.
+     */
+    public void reportDiagnostics(boolean hooksInstalled, @Nullable String hookDetail) {
+        Context context = context();
+        if (context == null) {
+            return;
+        }
+        Bundle b = new Bundle();
+        b.putString(StateKeys.TYPE, StateKeys.TYPE_DIAG);
+        b.putString(StateKeys.LOG_TAIL, AodLog.tail(30));
+        b.putString(StateKeys.LOG_BUILD, AodLyricModule.BUILD);
+        b.putString(StateKeys.LOG_PROCESS, processName());
+        push(context, b, "diag");
+        if (hookDetail != null) {
+            reportStatus(hooksInstalled, hookDetail, null);
+        }
+    }
+
+    @NonNull
+    private static String processName() {
+        try {
+            Class<?> at = Class.forName("android.app.ActivityThread");
+            Object name = at.getDeclaredMethod("currentProcessName").invoke(null);
+            return name == null ? "?" : String.valueOf(name);
+        } catch (Throwable t) {
+            return "?";
+        }
+    }
+
     public void reportLyric(@Nullable String track, @Nullable String line,
                             @Nullable String index, @Nullable String total,
                             @Nullable String chars) {
@@ -217,7 +252,7 @@ public final class ModuleReporter {
         try {
             context.getContentResolver().call(
                     StateKeys.stateUri(), StateKeys.METHOD_UPDATE, null, payload);
-            AodLog.i("report " + what + " -> provider ok");
+            AodLog.d("report " + what + " -> provider ok");
             return true;
         } catch (Throwable t) {
             AodLog.w("report " + what + " -> provider FAILED: "

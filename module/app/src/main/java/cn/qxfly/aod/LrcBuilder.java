@@ -91,6 +91,10 @@ public final class LrcBuilder {
      * The AOD parser runs Html.fromHtml(line + "<br/>") in decorate(). Any literal
      * '&lt;' or '&amp;' corrupts the rendered line, so escape both. Text is also
      * trimmed; empty lines are dropped upstream by the caller loop.
+     *
+     * <p>Ampersand MUST be escaped first: doing '<' first turned "a&lt;b" into
+     * "a&amp;lt;b", which Html.fromHtml renders as the literal text "&lt;"
+     * instead of "<".
      */
     @NonNull
     private static String sanitize(@Nullable String text) {
@@ -98,11 +102,11 @@ public final class LrcBuilder {
             return "";
         }
         String out = text.trim();
-        if (out.indexOf('<') >= 0) {
-            out = out.replace("<", "&lt;");
-        }
         if (out.indexOf('&') >= 0) {
             out = out.replace("&", "&amp;");
+        }
+        if (out.indexOf('<') >= 0) {
+            out = out.replace("<", "&lt;");
         }
         return out;
     }

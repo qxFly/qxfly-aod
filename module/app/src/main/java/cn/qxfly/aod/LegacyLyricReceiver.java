@@ -44,6 +44,18 @@ public final class LegacyLyricReceiver {
         }
 
         void onStop();
+
+        /**
+         * Track metadata for the current line: title/artist (raw, not the
+         * combined label), the next line if the payload carries a full
+         * document, and the line index/total.
+         *
+         * <p>Called even when the line text itself did not change, so the
+         * "next line" preview stays correct while a long line plays.
+         */
+        default void onMeta(@Nullable String title, @Nullable String artist,
+                            @Nullable String next, int index, int total) {
+        }
     }
 
     @Nullable
@@ -144,16 +156,29 @@ public final class LegacyLyricReceiver {
             }
             String title = data.getTitle();
             String artist = data.getArtist();
+            int index = data.getCurrentLyricIndex();
+            int total = data.getAllLyricsCount();
+            String next = null;
+            try {
+                if (total > 0 && index >= 0 && index + 1 < total) {
+                    SuperLyricLine after = data.getLyricAt(index + 1);
+                    next = after == null ? null : textOrNull(after.getText());
+                }
+            } catch (Throwable ignored) {
+                // Not every publisher exposes an indexed list.
+            }
+            // Meta first: it must refresh even when the line text repeats.
+            sink.onMeta(title, artist, next, index, total);
 
             if (text != null && text.equals(mLastText)) {
                 return;
             }
             mLastText = text;
-            AodLog.i("legacy lyric: publisher=" + publisher
+            AodLog.d("legacy lyric: publisher=" + publisher
                     + " line=" + text
                     + " translation=" + translation
                     + " full=" + data.hasAllLyrics()
-                    + " idx=" + data.getCurrentLyricIndex());
+                    + " idx=" + index);
             sink.onLine(text, translation, title, artist);
         } catch (Throwable t) {
             AodLog.w("legacy lyric handling failed: " + t);

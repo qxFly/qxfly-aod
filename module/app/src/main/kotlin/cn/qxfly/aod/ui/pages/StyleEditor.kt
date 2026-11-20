@@ -87,6 +87,14 @@ data class StyleDraft(
     val bgColor: Int = 0xFF000000.toInt(),
     /** 背景色块不透明度 0..1。 */
     val bgAlpha: Float = 0.45f,
+    /** true = 在歌词上方显示歌名与歌手。 */
+    val showTrack: Boolean = false,
+    /** true = 在歌词下方淡色显示下一句。 */
+    val showNext: Boolean = false,
+    /** true = 在歌词下方显示播放进度。 */
+    val showProgress: Boolean = false,
+    /** true = 暂停时把当前歌词变暗保留。 */
+    val pauseKeep: Boolean = true,
 )
 
 internal fun LyricStyle.toDraft() = StyleDraft(
@@ -106,6 +114,10 @@ internal fun LyricStyle.toDraft() = StyleDraft(
     bgEnabled = bgEnabled,
     bgColor = bgColor,
     bgAlpha = bgAlpha,
+    showTrack = showTrack,
+    showNext = showNext,
+    showProgress = showProgress,
+    pauseKeep = pauseKeep,
 )
 
 internal fun StyleDraft.toLyricStyle() = LyricStyle().apply {
@@ -125,6 +137,10 @@ internal fun StyleDraft.toLyricStyle() = LyricStyle().apply {
     bgEnabled = this@toLyricStyle.bgEnabled
     bgColor = this@toLyricStyle.bgColor
     bgAlpha = this@toLyricStyle.bgAlpha
+    showTrack = this@toLyricStyle.showTrack
+    showNext = this@toLyricStyle.showNext
+    showProgress = this@toLyricStyle.showProgress
+    pauseKeep = this@toLyricStyle.pauseKeep
 }
 
 /** 粗粒度锚点（与 Hook 侧 ANCHOR_* 一致）：大时钟 / 图片 / 时间日期组件 / 通知。 */
@@ -195,6 +211,42 @@ internal fun StyleEditorCard(data: ModuleData) {
         }
     }
 
+    // ---- 配置导入 / 导出（SAF，不需要存储权限）----
+    val exportFailedMsg = stringResource(R.string.style_import_fail)
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json"),
+    ) { uri ->
+        if (uri != null) {
+            val ok = runCatching {
+                context.contentResolver.openOutputStream(uri)?.use { out ->
+                    out.write(draft.toJson().toByteArray(Charsets.UTF_8))
+                } != null
+            }.getOrDefault(false)
+            statusLine = if (ok) {
+                context.getString(R.string.style_export_ok, uri.lastPathSegment ?: "JSON")
+            } else {
+                exportFailedMsg
+            }
+        }
+    }
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) {
+            val text = runCatching {
+                context.contentResolver.openInputStream(uri)?.bufferedReader()
+                    ?.use { it.readText() }
+            }.getOrNull()
+            val imported = text?.let { draftFromJson(it) }
+            if (imported != null) {
+                draft = imported
+                statusLine = context.getString(R.string.style_import_ok)
+            } else {
+                statusLine = context.getString(R.string.style_import_fail)
+            }
+        }
+    }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -209,6 +261,31 @@ internal fun StyleEditorCard(data: ModuleData) {
         Spacer(Modifier.height(10.dp))
 
         StylePreview(draft)
+        Spacer(Modifier.height(12.dp))
+
+        Text(
+            text = stringResource(R.string.style_presets),
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+        )
+        Spacer(Modifier.height(6.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PresetChip(stringResource(R.string.style_preset_minimal)) {
+                draft = applyPreset(draft, Preset.MINIMAL)
+                statusLine = context.getString(R.string.style_preset_saved,
+                        context.getString(R.string.style_preset_minimal))
+            }
+            PresetChip(stringResource(R.string.style_preset_bold)) {
+                draft = applyPreset(draft, Preset.BOLD)
+                statusLine = context.getString(R.string.style_preset_saved,
+                        context.getString(R.string.style_preset_bold))
+            }
+            PresetChip(stringResource(R.string.style_preset_pill)) {
+                draft = applyPreset(draft, Preset.PILL)
+                statusLine = context.getString(R.string.style_preset_saved,
+                        context.getString(R.string.style_preset_pill))
+            }
+        }
         Spacer(Modifier.height(12.dp))
 
         SliderRow(
@@ -432,7 +509,9 @@ internal fun StyleEditorCard(data: ModuleData) {
 
         Spacer(Modifier.height(10.dp))
         Row(
-            Modifier.fillMaxWidth(),
+            Modifier
+                .fillMaxWidth()
+                .padding(vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(stringResource(R.string.style_bold), Modifier.weight(1f), fontSize = 13.sp)
@@ -442,7 +521,9 @@ internal fun StyleEditorCard(data: ModuleData) {
             )
         }
         Row(
-            Modifier.fillMaxWidth(),
+            Modifier
+                .fillMaxWidth()
+                .padding(vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
@@ -456,6 +537,54 @@ internal fun StyleEditorCard(data: ModuleData) {
             Switch(
                 checked = draft.showTranslation,
                 onCheckedChange = { v -> draft = draft.copy(showTranslation = v) },
+            )
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Text(
+            text = stringResource(R.string.style_extra_section),
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+        )
+        LabeledSwitchRow(
+            title = stringResource(R.string.style_show_track),
+            summary = stringResource(R.string.style_show_track_summary),
+            checked = draft.showTrack,
+            onChange = { v -> draft = draft.copy(showTrack = v) },
+        )
+        LabeledSwitchRow(
+            title = stringResource(R.string.style_show_next),
+            summary = stringResource(R.string.style_show_next_summary),
+            checked = draft.showNext,
+            onChange = { v -> draft = draft.copy(showNext = v) },
+        )
+        LabeledSwitchRow(
+            title = stringResource(R.string.style_show_progress),
+            summary = stringResource(R.string.style_show_progress_summary),
+            checked = draft.showProgress,
+            onChange = { v -> draft = draft.copy(showProgress = v) },
+        )
+        LabeledSwitchRow(
+            title = stringResource(R.string.style_pause_keep),
+            summary = stringResource(R.string.style_pause_keep_summary),
+            checked = draft.pauseKeep,
+            onChange = { v -> draft = draft.copy(pauseKeep = v) },
+        )
+
+        Spacer(Modifier.height(10.dp))
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            TextButton(
+                text = stringResource(R.string.style_export),
+                onClick = { exportLauncher.launch("aodlyric-style.json") },
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(
+                text = stringResource(R.string.style_import),
+                onClick = { importLauncher.launch(arrayOf("application/json", "text/plain")) },
+                modifier = Modifier.weight(1f),
             )
         }
 
@@ -533,6 +662,129 @@ internal fun StyleEditorCard(data: ModuleData) {
     }
 }
 
+/** 标题 + 说明 + 右侧开关，用于附加信息里的 4 个选项。 */
+@Composable
+private fun LabeledSwitchRow(
+    title: String,
+    summary: String,
+    checked: Boolean,
+    onChange: (Boolean) -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, fontSize = 13.sp)
+            Text(
+                text = summary,
+                fontSize = 11.sp,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            )
+        }
+        Switch(checked = checked, onCheckedChange = onChange)
+    }
+}
+
+/** 预设只改「观感」，不动锚点/偏移，避免一键预设把用户的定位覆盖掉。 */
+private enum class Preset { MINIMAL, BOLD, PILL }
+
+private fun applyPreset(draft: StyleDraft, preset: Preset): StyleDraft = when (preset) {
+    Preset.MINIMAL -> draft.copy(
+        textSizeSp = 22f,
+        strokeWidth = 0f,
+        weight = 1,
+        bgEnabled = false,
+        showTranslation = false,
+    )
+    Preset.BOLD -> draft.copy(
+        textSizeSp = 24f,
+        strokeWidth = 3f,
+        strokeColor = 0xFF000000.toInt(),
+        weight = 0,
+        bgEnabled = false,
+    )
+    Preset.PILL -> draft.copy(
+        textSizeSp = 22f,
+        strokeWidth = 0f,
+        bgEnabled = true,
+        bgColor = 0xFF000000.toInt(),
+        bgAlpha = 0.45f,
+    )
+}
+
+@Composable
+private fun PresetChip(label: String, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(MiuixTheme.colorScheme.secondaryContainer)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+    ) {
+        Text(label, fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurface)
+    }
+}
+
+/** 配置导出格式：带版本号，方便以后兼容旧文件。 */
+private const val STYLE_JSON_VERSION = 1
+
+private fun StyleDraft.toJson(): String = org.json.JSONObject().apply {
+    put("format", "aodlyric-style")
+    put("version", STYLE_JSON_VERSION)
+    put("textSizeSp", textSizeSp.toDouble())
+    put("textColor", textColor)
+    put("typefaceName", typefaceName ?: "")
+    put("strokeWidth", strokeWidth.toDouble())
+    put("strokeColor", strokeColor)
+    put("weight", weight)
+    put("offsetRatio", offsetRatio.toDouble())
+    put("align", align)
+    put("anchorId", anchorId ?: "")
+    put("anchorPos", anchorPos)
+    put("anchorGap", anchorGap.toDouble())
+    put("treeInsert", treeInsert)
+    put("showTranslation", showTranslation)
+    put("bgEnabled", bgEnabled)
+    put("bgColor", bgColor)
+    put("bgAlpha", bgAlpha.toDouble())
+    put("showTrack", showTrack)
+    put("showNext", showNext)
+    put("showProgress", showProgress)
+    put("pauseKeep", pauseKeep)
+}.toString(2)
+
+private fun draftFromJson(raw: String): StyleDraft? = runCatching {
+    val o = org.json.JSONObject(raw)
+    if (o.optString("format") != "aodlyric-style") {
+        return null
+    }
+    StyleDraft(
+        textSizeSp = o.optDouble("textSizeSp", 20.0).toFloat(),
+        textColor = o.optInt("textColor", 0xFFFFFFFF.toInt()),
+        typefaceName = o.optString("typefaceName").takeIf { it.isNotEmpty() },
+        strokeWidth = o.optDouble("strokeWidth", 0.0).toFloat(),
+        strokeColor = o.optInt("strokeColor", 0xFF000000.toInt()),
+        weight = o.optInt("weight", 0),
+        offsetRatio = o.optDouble("offsetRatio", 0.42).toFloat(),
+        align = o.optInt("align", 0),
+        anchorId = o.optString("anchorId").takeIf { it.isNotEmpty() },
+        anchorPos = o.optInt("anchorPos", 1),
+        anchorGap = o.optDouble("anchorGap", 12.0).toFloat(),
+        treeInsert = o.optBoolean("treeInsert", false),
+        showTranslation = o.optBoolean("showTranslation", false),
+        bgEnabled = o.optBoolean("bgEnabled", false),
+        bgColor = o.optInt("bgColor", 0xFF000000.toInt()),
+        bgAlpha = o.optDouble("bgAlpha", 0.45).toFloat(),
+        showTrack = o.optBoolean("showTrack", false),
+        showNext = o.optBoolean("showNext", false),
+        showProgress = o.optBoolean("showProgress", false),
+        pauseKeep = o.optBoolean("pauseKeep", true),
+    )
+}.getOrNull()
+
 /** 选中态明确的文字按钮：字体等选项点击后必须有可见反馈。 */
 @Composable
 private fun SelectableChip(
@@ -609,6 +861,19 @@ private fun StylePreview(draft: StyleDraft) {
                 else -> Alignment.CenterHorizontally
             },
         ) {
+            if (draft.showTrack) {
+                BasicText(
+                    text = stringResource(R.string.style_preview_track),
+                    style = TextStyle(
+                        fontSize = (draft.textSizeSp * 0.58f).sp,
+                        color = Color(draft.textColor).copy(alpha = 0.55f),
+                        fontWeight = fontWeight,
+                        fontFamily = fontFamily,
+                        textAlign = alignment,
+                    ),
+                    modifier = Modifier.padding(bottom = 4.dp),
+                )
+            }
             if (draft.strokeWidth > 0.5f) {
                 // Compose 没有文字描边 API：用 8 向偏移的同字副本模拟。
                 val sw = draft.strokeWidth.coerceIn(0.5f, 6f)
@@ -654,6 +919,30 @@ private fun StylePreview(draft: StyleDraft) {
                         lineHeight = (draft.textSizeSp * 1.1f).sp,
                     ),
                     modifier = bgModifier,
+                )
+            }
+            if (draft.showNext) {
+                BasicText(
+                    text = stringResource(R.string.style_preview_next),
+                    style = TextStyle(
+                        fontSize = (draft.textSizeSp * 0.60f).sp,
+                        color = Color(draft.textColor).copy(alpha = 0.45f),
+                        fontWeight = fontWeight,
+                        fontFamily = fontFamily,
+                        textAlign = alignment,
+                    ),
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+            if (draft.showProgress) {
+                BasicText(
+                    text = stringResource(R.string.style_preview_progress),
+                    style = TextStyle(
+                        fontSize = (draft.textSizeSp * 0.52f).sp,
+                        color = Color(draft.textColor).copy(alpha = 0.50f),
+                        textAlign = alignment,
+                    ),
+                    modifier = Modifier.padding(top = 2.dp),
                 )
             }
         }

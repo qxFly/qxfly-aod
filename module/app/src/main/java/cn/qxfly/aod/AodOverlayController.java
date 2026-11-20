@@ -16,6 +16,26 @@ import io.github.libxposed.api.XposedInterface;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static cn.qxfly.aod.AnchorIds.ANCHOR_CLOCK;
+import static cn.qxfly.aod.AnchorIds.ANCHOR_IMAGE;
+import static cn.qxfly.aod.AnchorIds.ANCHOR_NOTIFY;
+import static cn.qxfly.aod.AnchorIds.ANCHOR_ORDER;
+import static cn.qxfly.aod.AnchorIds.ANCHOR_TIMEDATE;
+import static cn.qxfly.aod.AnchorIds.canonicalCandidates;
+import static cn.qxfly.aod.AnchorIds.legacyToCanonical;
+import static cn.qxfly.aod.ComponentCollector.collectComponents;
+import static cn.qxfly.aod.ComponentCollector.containsBounds;
+import static cn.qxfly.aod.ComponentCollector.containsId;
+import static cn.qxfly.aod.MamlBridge.bumpSurfaceFrameRate;
+import static cn.qxfly.aod.MamlBridge.clockText;
+import static cn.qxfly.aod.MamlBridge.driveFramerate;
+import static cn.qxfly.aod.MamlBridge.findUtilsClass;
+import static cn.qxfly.aod.MamlBridge.forceTraversal;
+import static cn.qxfly.aod.MamlBridge.harvestMamlRoots;
+import static cn.qxfly.aod.MamlBridge.readField;
+import static cn.qxfly.aod.MamlBridge.startRootMotion;
+import static cn.qxfly.aod.MamlBridge.stopRootMotion;
+
 /**
  * Self-drawn lyric overlay for the AOD.
  *
@@ -42,6 +62,11 @@ public final class AodOverlayController {
 
     private static volatile boolean sHooked;
     private static volatile boolean sAodVisible;
+
+    /** True while the AOD window is showing (used by the adaptive poll). */
+    static boolean isAodVisible() {
+        return sAodVisible;
+    }
 
     /** Process-wide module interface, for static helpers (touch watch, pulses). */
     @Nullable
@@ -1175,77 +1200,9 @@ public final class AodOverlayController {
     // big clock, image, time/date components, notifications. Everything below
     // is internal mapping: canonical ids resolve through per-theme candidate
     // lists, legacy fine-grained ids map to their nearest coarse region so old
-    // configurations keep working.
+    // configurations keep working. The id table itself lives in AnchorIds.
 
-    /** Canonical anchor ids (stored in styleAnchorId, shown in the picker). */
-    static final String ANCHOR_CLOCK = "clock";
-    static final String ANCHOR_IMAGE = "image";
-    static final String ANCHOR_TIMEDATE = "timedate";
-    static final String ANCHOR_NOTIFY = "notify";
-
-    /** Picker display order. */
-    private static final String[] ANCHOR_ORDER = {
-            ANCHOR_CLOCK, ANCHOR_IMAGE, ANCHOR_TIMEDATE, ANCHOR_NOTIFY,
-    };
-
-    /** Candidate entry names per canonical anchor, best first. */
-    @Nullable
-    private static String[] canonicalCandidates(@NonNull String canonical) {
-        switch (canonical) {
-            case ANCHOR_CLOCK:
-                return new String[]{
-                        "gradient_layout", "clock_vertical_container",
-                        "clock_container", "clock", "big_time",
-                };
-            case ANCHOR_IMAGE:
-                return new String[]{
-                        "image_shower", "image_shower_container",
-                        "image_selector_shower", "classic_gallery",
-                        "classic_image", "photo", "wallpaper",
-                };
-            case ANCHOR_TIMEDATE:
-                return new String[]{
-                        "clock_horizontal_container", "date_lunar",
-                        "date_dual", "date", "data_dual_container",
-                };
-            case ANCHOR_NOTIFY:
-                return new String[]{
-                        "aod_icons_container", "icons", "fn_container",
-                        "notification_container",
-                };
-            default:
-                return null;
-        }
-    }
-
-    /**
-     * Maps a legacy fine-grained anchor id to its nearest coarse region, or
-     * null when the id is not recognised (it is then used as-is, unchanged
-     * behaviour for custom ids).
-     */
-    @Nullable
-    static String legacyToCanonical(@NonNull String id) {
-        String l = id.toLowerCase(java.util.Locale.US);
-        if (l.contains("shower") || l.contains("image") || l.contains("gallery")
-                || l.contains("photo") || l.contains("wallpaper")
-                || l.contains("cover") || l.contains("album")) {
-            return ANCHOR_IMAGE;
-        }
-        if (l.contains("gradient") || l.contains("clock_container")
-                || l.contains("clock_vertical") || l.contains("big")) {
-            return ANCHOR_CLOCK;
-        }
-        if (l.contains("icon") || l.contains("notif")) {
-            return ANCHOR_NOTIFY;
-        }
-        if (l.contains("clock") || l.contains("date") || l.contains("time")
-                || l.contains("lunar") || l.contains("battery")
-                || l.contains("step")) {
-            return ANCHOR_TIMEDATE;
-        }
-        return null;
-    }
-
+    /** Picker display order (kept here for readability of the call sites). */
     /**
      * Resolves any anchor id (canonical 4-region or legacy fine-grained) to a
      * concrete view in the current theme.
@@ -1316,123 +1273,14 @@ public final class AodOverlayController {
 
     /** The stored hook-process reporter, or null in the app process. */
     @Nullable
-    private static ModuleReporter reporter() {
+    static ModuleReporter reporter() {
         ModuleReporter r = Reporter.access();
         return r;
-    }
-
-    /**
-     * Collects anchor candidates for the app's anchor picker, as
-     * "id|class|[absX,absY w h]" lines - now exactly the 4 coarse regions
-     * (clock / image / timedate / notify). The raw traversal below is only
-     * the discovery pass; its fine-grained entries are mapped onto the 4
-     * regions and never reach the provider, so the dropdown stays short and
-     * every entry is guaranteed meaningful for insertion.
-     */
-    private static void collectComponents(@NonNull ViewGroup parent,
-            @NonNull List<String> out, int depth, int absX, int absY) {
-        List<String> raw = new java.util.ArrayList<>(24);
-        collectRawComponents(parent, raw, 0, 0, 0);
-        for (String canonical : ANCHOR_ORDER) {
-            String[] cands = canonicalCandidates(canonical);
-            if (cands == null) {
-                continue;
-            }
-            for (String cand : cands) {
-                String line = findById(raw, cand);
-                if (line != null) {
-                    // Replace the fine-grained name with the canonical one but
-                    // keep the discovered class and absolute bounds.
-                    String rest = line.substring(cand.length() + 1);
-                    out.add(canonical + rest);
-                    break;
-                }
-            }
-        }
-        AodLyricModule.i("anchor regions reported: " + out);
-    }
-
-    /** First raw line whose id equals the given entry name, or null. */
-    @Nullable
-    private static String findById(@NonNull List<String> raw, @NonNull String id) {
-        String prefix = id + "|";
-        for (String line : raw) {
-            if (line.startsWith(prefix)) {
-                return line;
-            }
-        }
-        return null;
-    }
-
-    /**
-     * Raw discovery pass (kept from the previous fine-grained picker): visible,
-     * measured, named views in ABSOLUTE window coordinates, deduped by name
-     * and by absolute position. Internal only - see {@link #collectComponents}.
-     */
-    private static void collectRawComponents(@NonNull ViewGroup parent,
-            @NonNull List<String> out, int depth, int absX, int absY) {
-        if (depth > 8 || out.size() >= 60) {
-            return;
-        }
-        int count = parent.getChildCount();
-        for (int i = 0; i < count && out.size() < 60; i++) {
-            android.view.View c = parent.getChildAt(i);
-            if (c == null || c instanceof LyricTextView) {
-                continue;
-            }
-            try {
-                String name = null;
-                if (c.getId() != android.view.View.NO_ID) {
-                    name = c.getResources().getResourceEntryName(c.getId());
-                }
-                boolean useful = c.getVisibility() == android.view.View.VISIBLE
-                        && c.getWidth() > 0 && c.getHeight() > 0
-                        && name != null && !name.isEmpty()
-                        && !(c instanceof android.view.ViewStub);
-                if (useful) {
-                    String bounds = "[" + (absX + c.getLeft()) + "," + (absY + c.getTop())
-                            + " " + c.getWidth() + "x" + c.getHeight() + "]";
-                    if (!containsId(out, name) && !containsBounds(out, bounds)) {
-                        out.add(name + "|"
-                                + c.getClass().getSimpleName()
-                                + "|" + bounds);
-                    }
-                }
-                if (c instanceof ViewGroup) {
-                    collectRawComponents((ViewGroup) c, out, depth + 1,
-                            absX + c.getLeft(), absY + c.getTop());
-                }
-            } catch (Throwable ignored) {
-            }
-        }
-    }
-
-    /** True when any collected line ends with the given absolute-bounds string. */
-    private static boolean containsBounds(@NonNull List<String> lines, @NonNull String bounds) {
-        for (String line : lines) {
-            if (line.endsWith("|" + bounds)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /** True when any collected line starts with "name|". */
-    private static boolean containsId(@NonNull List<String> lines, @NonNull String name) {
-        for (int i = 0; i < lines.size(); i++) {
-            if (lines.get(i).startsWith(name + "|")) {
-                return true;
-            }
-        }
-        return false;
     }
 
     /** True when the lyric is currently parented to the movable container. */
     public static boolean isFollowingClock() {
         return sInClockContainer;
-    }
-
-    private static void unusedPlaceholder() {
     }
 
     /** The view's current parent, or the remembered clock container. */
@@ -1473,6 +1321,14 @@ public final class AodOverlayController {
     /** Last text applied, so the log only reports real changes. */
     @Nullable
     private static volatile String sLastText;
+
+    /** Composed (multi-line, spanned) content currently on screen. */
+    @Nullable
+    private static volatile CharSequence sLastSpanned;
+
+    /** Change marker of the last rendered {@link LyricDisplay}. */
+    @Nullable
+    private static volatile String sLastSignature;
 
     /**
      * True only while a real lyric line is on screen. Everything that costs
@@ -2037,42 +1893,104 @@ public final class AodOverlayController {
     private static final char TRANSLATION_SEP = '\n';
 
     /**
-     * Styles the translation line separately from the original.
+     * Builds the whole overlay content from a {@link LyricDisplay}.
      *
      * <p>The overlay is a single TextView (the AOD layout, anchor offsets and
-     * the budget-expansion logic all key off one view), so the translation
-     * cannot be a second view. Instead the text carries a newline separator and
-     * the part after it is re-styled here: smaller size, dimmer colour - the
-     * usual bilingual lyric look. Text without a separator is returned as a
-     * plain String so the common case allocates nothing.
+     * the budget-expansion logic all key off one view), so every extra line -
+     * track info, translation, next line, progress - is composed into one
+     * Spannable with its own size/colour. That keeps the placement logic and
+     * the pulse/kicker machinery untouched.
      */
     @NonNull
-    private static CharSequence styleTranslationSpan(@NonNull TextView tv, @NonNull String text) {
-        int sep = text.indexOf(TRANSLATION_SEP);
-        if (sep <= 0 || sep >= text.length() - 1) {
-            return text;
-        }
+    private static CharSequence compose(@NonNull TextView tv, @NonNull LyricDisplay d) {
         LyricStyle style = sStyle;
         float baseSp = style == null ? tv.getTextSize() : style.textSizeSp;
-        float translationSp = Math.max(10f, baseSp * 0.62f);
-        int color = style == null ? tv.getCurrentTextColor() : style.textColor;
-        int dimColor = (color & 0x00FFFFFF) | 0xB3000000; // ~70% alpha
+        int baseColor = style == null ? tv.getCurrentTextColor() : style.textColor;
+        float density = tv.getResources().getDisplayMetrics().scaledDensity;
 
-        android.text.SpannableString span = new android.text.SpannableString(text);
-        span.setSpan(new android.text.style.AbsoluteSizeSpan(
-                        Math.round(translationSp * tv.getResources().getDisplayMetrics().scaledDensity)),
-                sep, text.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-        span.setSpan(new android.text.style.ForegroundColorSpan(dimColor),
-                sep, text.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-        return span;
+        android.text.SpannableStringBuilder sb = new android.text.SpannableStringBuilder();
+
+        boolean showTrack = style != null && style.showTrack;
+        if (showTrack) {
+            String track = trackLine(d);
+            if (track != null && !track.isEmpty()) {
+                appendPart(sb, track, baseSp * 0.58f, baseColor, 0.55f, density, false);
+            }
+        }
+
+        appendPart(sb, d.line == null ? "" : d.line, baseSp, baseColor, 1f, density,
+                sb.length() > 0);
+
+        if (style != null && style.showTranslation) {
+            String tr = d.translation;
+            if (tr != null && !tr.trim().isEmpty() && !tr.equals(d.line)) {
+                appendPart(sb, tr, Math.max(10f, baseSp * 0.62f), baseColor, 0.70f, density, true);
+            }
+        }
+        if (style != null && style.showNext) {
+            String next = d.next;
+            if (next != null && !next.trim().isEmpty() && !next.equals(d.line)) {
+                appendPart(sb, next, Math.max(10f, baseSp * 0.60f), baseColor, 0.45f, density, true);
+            }
+        }
+        if (style != null && style.showProgress && d.durationMs > 0 && d.positionMs >= 0) {
+            String progress = LyricDisplay.time(d.positionMs) + " / "
+                    + LyricDisplay.time(d.durationMs);
+            if (d.paused) {
+                progress = progress + "  ⏸";
+            }
+            appendPart(sb, progress, Math.max(9f, baseSp * 0.52f), baseColor, 0.50f, density, true);
+        }
+        return sb;
     }
 
-    private static void applyText(@NonNull TextView tv, @NonNull String text) {
+    /** "title - artist" trimmed for one line, or null when nothing is known. */
+    @Nullable
+    private static String trackLine(@NonNull LyricDisplay d) {
+        String title = d.title == null ? "" : d.title.trim();
+        String artist = d.artist == null ? "" : d.artist.trim();
+        if (title.isEmpty() && artist.isEmpty()) {
+            return null;
+        }
+        if (title.isEmpty()) {
+            return artist;
+        }
+        if (artist.isEmpty() || artist.equals(title)) {
+            return title;
+        }
+        return artist + " - " + title;
+    }
+
+    /**
+     * Appends one line with its own size/colour. {@code alpha} is applied on
+     * top of the base colour so every secondary line keeps the user's hue.
+     */
+    private static void appendPart(@NonNull android.text.SpannableStringBuilder sb,
+                                   @NonNull String text, float sizeSp, int baseColor,
+                                   float alpha, float density, boolean newLine) {
+        if (newLine) {
+            sb.append(TRANSLATION_SEP);
+        }
+        int start = sb.length();
+        sb.append(text);
+        int end = sb.length();
+        if (end <= start) {
+            return;
+        }
+        int color = (baseColor & 0x00FFFFFF) | (Math.round(alpha * 255f) << 24);
+        sb.setSpan(new android.text.style.ForegroundColorSpan(color),
+                start, end, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        sb.setSpan(new android.text.style.AbsoluteSizeSpan(Math.round(sizeSp * density)),
+                start, end, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        // Secondary lines must not inherit the pill background of the main
+        // line; LyricTextView draws that itself, so nothing to do here.
+    }
+
+    private static void applyText(@NonNull TextView tv, @NonNull CharSequence content) {
         try {
             postOnMain(() -> {
-                tv.setText(styleTranslationSpan(tv, text));
+                tv.setText(content);
                 java.lang.ref.WeakReference<ViewGroup> rootRef = sRootRef;
-                ViewGroup root = rootRef == null ? null : rootRef.get();
                 // Re-attach after hideOverlay() removed us.
                 ViewGroup parent = currentParent(tv);
                 if (tv.getParent() == null && parent != null) {
@@ -2135,46 +2053,83 @@ public final class AodOverlayController {
      * option never hides anything.
      */
     public static void setText(@Nullable String line, @Nullable String translation) {
+        LyricDisplay d = new LyricDisplay();
+        d.line = line;
+        d.translation = translation;
+        // No playback metadata on this path: the style's extra lines simply
+        // render nothing, which keeps legacy callers working unchanged.
+        setLyric(d);
+    }
+
+    /**
+     * Renders one line plus everything the style decorates it with.
+     *
+     * <p>State machine (unchanged from the single-line version, extended for
+     * pause handling):
+     * <ul>
+     *   <li>no line and not paused-with-keep -&gt; idle: clear, hide, no pulses;</li>
+     *   <li>paused and {@code pauseKeep} -&gt; keep the line, dim it, stop
+     *       pulsing (a paused screen must not burn power);</li>
+     *   <li>playing -&gt; full opacity, pulse for the panel, render.</li>
+     * </ul>
+     */
+    public static void setLyric(@Nullable LyricDisplay display) {
         TextView tv = sView.get();
         if (tv == null || !sAodVisible) {
             return;
         }
-        String original = line == null ? "" : line;
-        String trans = translation == null ? "" : translation.trim();
+        LyricDisplay d = display == null ? new LyricDisplay() : display;
         LyricStyle style = sStyle;
-        boolean wantTranslation = style != null && style.showTranslation
-                && !trans.isEmpty() && !trans.equals(original);
-        final String text = wantTranslation ? original + "\n" + trans : original;
-        if (text.equals(sLastText)) {
-            return;
-        }
-        sLastText = text;
+        boolean pausedKeep = d.paused && style != null && style.pauseKeep && d.hasLine();
 
-        // Empty text means playback stopped or paused. Clear the line and go
-        // completely idle: no display pulses, no kicker work. Pulsing while
-        // nothing plays is what kept breaking touch handling, and it also wastes
-        // power for no visible result.
-        if (text.isEmpty()) {
-            AodLyricModule.i("overlay idle (no lyric)");
+        if (!d.hasLine() && !pausedKeep) {
+            if (sLastText != null && !sLastText.isEmpty()) {
+                AodLyricModule.i("overlay idle (no lyric)");
+            }
+            sLastText = "";
+            sLastSpanned = null;
+            sLastSignature = null;
             sActive = false;
             // One pulse on the active->idle transition: the panel only
             // re-renders on a pulse, and the NATIVE theme's own lyric pills
             // must re-query the (now empty) lyric to clear the ghost line -
             // without this the last line stayed frozen on photo/full-screen
-            // AOD themes after playback stopped. sLastText dedupe keeps this
-            // to a single pulse per transition (no idle-time pulsing).
+            // AOD themes after playback stopped.
             requestPulse(swapContext());
             // Hide rather than blank: an invisible, non-touchable view cannot
             // cover the fingerprint sensor while nothing is playing.
+            postOnMain(() -> tv.setAlpha(1f));
             hideOverlay(tv);
             return;
         }
 
+        String signature = d.signature(style != null && style.showProgress);
+        if (signature.equals(sLastSignature)) {
+            return;
+        }
+        boolean wasIdle = !sActive;
+        sLastSignature = signature;
+        sContentAt = android.os.SystemClock.elapsedRealtime();
+        sLastText = d.line == null ? "" : d.line;
+        sLastSpanned = compose(tv, d);
         sActive = true;
-        AodLyricModule.i("overlay text -> " + text);
-        // The ONLY thing that refreshes the panel: a doze pulse.
-        requestPulse(swapContext());
-        applyText(tv, text);
+
+        boolean dim = d.paused;
+        if (wasIdle) {
+            AodLyricModule.i("overlay text -> " + sLastText
+                    + (d.paused ? " (paused)" : "")
+                    + (d.next == null ? "" : " | next=" + d.next));
+        }
+        // A pause transition changes only the alpha: one pulse is enough to
+        // make the panel re-capture, no need to keep the lyric "active".
+        if (dim) {
+            requestPulse(swapContext());
+            postOnMain(() -> tv.setAlpha(0.55f));
+        } else {
+            requestPulse(swapContext());
+            postOnMain(() -> tv.setAlpha(1f));
+        }
+        applyText(tv, sLastSpanned);
     }
 
     /**
@@ -2226,101 +2181,10 @@ public final class AodOverlayController {
         }
     }
 
-    /**
-     * Raises the frame rate of the window's own Surface.
-     *
-     * <p>MIUI parks the doze window on a very low refresh cadence; asking the
-     * Surface for a fixed 60 Hz is the lowest-level request available to us and
-     * makes SurfaceFlinger treat the layer as actively updated.
-     */
-    private static void bumpSurfaceFrameRate(@NonNull android.view.View anchor) {
-        try {
-            Object attachInfo = readField(anchor, "mAttachInfo");
-            if (attachInfo == null) {
-                return;
-            }
-            Object viewRootImpl = readField(attachInfo, "mViewRootImpl");
-            if (viewRootImpl == null) {
-                return;
-            }
-            Object surface = readField(viewRootImpl, "mSurface");
-            if (!(surface instanceof android.view.Surface)) {
-                return;
-            }
-            android.view.Surface s = (android.view.Surface) surface;
-            if (!s.isValid()) {
-                return;
-            }
-            // API 31+: setFrameRate(float, compatibility, changeStrategy)
-            java.lang.reflect.Method m = android.view.Surface.class.getMethod(
-                    "setFrameRate", float.class, int.class, int.class);
-            m.invoke(s, 60f, 1 /* FIXED_SOURCE */, 0 /* seamless only */);
-            if (!sFrameWarned2) {
-                sFrameWarned2 = true;
-                AodLyricModule.i("AOD surface frame rate raised to 60Hz");
-            }
-        } catch (Throwable t) {
-            if (!sFrameWarned2) {
-                sFrameWarned2 = true;
-                AodLyricModule.i("surface frame rate unavailable: "
-                        + t.getClass().getSimpleName());
-            }
-        }
-    }
+    static volatile boolean sFrameWarned2;
 
-    private static volatile boolean sFrameWarned2;
-
-    /**
-     * Schedules a real traversal on the window that owns the AOD.
-     *
-     * <p>The AOD's composition ignores ordinary {@code invalidate()} once it has
-     * settled - the view keeps the new text but the display never re-composites.
-     * Going through {@code ViewRootImpl#scheduleTraversals()} is the same path
-     * the system uses to refresh its own clock, and it does force a redraw.
-     */
-    private static void forceTraversal(@NonNull android.view.View anchor) {
-        try {
-            Object attachInfo = readField(anchor, "mAttachInfo");
-            if (attachInfo == null) {
-                return;
-            }
-            Object viewRootImpl = readField(attachInfo, "mViewRootImpl");
-            if (viewRootImpl == null) {
-                return;
-            }
-            java.lang.reflect.Method schedule = viewRootImpl.getClass()
-                    .getDeclaredMethod("scheduleTraversals");
-            schedule.setAccessible(true);
-            schedule.invoke(viewRootImpl);
-            sTraversalOk = true;
-        } catch (Throwable t) {
-            if (!sTraversalWarned) {
-                sTraversalWarned = true;
-                AodLyricModule.w("scheduleTraversals unavailable: "
-                        + t.getClass().getSimpleName() + ": " + t.getMessage());
-            }
-        }
-    }
-
-    @Nullable
-    private static Object readField(@NonNull Object owner, @NonNull String name) {
-        Class<?> type = owner.getClass();
-        while (type != null) {
-            try {
-                java.lang.reflect.Field f = type.getDeclaredField(name);
-                f.setAccessible(true);
-                return f.get(owner);
-            } catch (NoSuchFieldException e) {
-                type = type.getSuperclass();
-            } catch (Throwable t) {
-                return null;
-            }
-        }
-        return null;
-    }
-
-    private static volatile boolean sTraversalOk;
-    private static volatile boolean sTraversalWarned;
+    static volatile boolean sTraversalOk;
+    static volatile boolean sTraversalWarned;
 
     /**
      * Every MAML root seen in this process.
@@ -2331,11 +2195,11 @@ public final class AodOverlayController {
      * wrong tree's framerate leaves the AOD renderer in static mode, which is
      * exactly the "text updates but screen frozen" symptom.
      */
-    private static final java.util.List<java.lang.ref.WeakReference<Object>> sMamlRoots =
+    static final java.util.List<java.lang.ref.WeakReference<Object>> sMamlRoots =
             java.util.Collections.synchronizedList(new java.util.ArrayList<>());
 
-    private static volatile boolean sFrameWarned;
-    private static volatile boolean sFrameOk;
+    static volatile boolean sFrameWarned;
+    static volatile boolean sFrameOk;
 
     /** Called from the MAML addElement hook with the root instance. */
     public static void setMamlRoot(@Nullable Object root) {
@@ -2357,152 +2221,17 @@ public final class AodOverlayController {
         }
     }
 
-    /**
-     * Commands every known MAML root to render continuously.
-     *
-     * <p>Same lever the native lyric path uses: MusicControlScreenElement calls
-     * {@code requestFramerate(mLyric != null ? 30f : MAX_TEXTSIZE)}, where
-     * MAX_TEXTSIZE means "static, do not redraw". A theme without a music
-     * element therefore parks its renderer in static mode; no invalidate() or
-     * scheduleTraversals() from our overlay can make the window recomposite
-     * until the renderer itself is animated again.
-     */
-    private static void driveFramerate() {
-        java.util.List<Object> live;
-        synchronized (sMamlRoots) {
-            live = new java.util.ArrayList<>(sMamlRoots.size());
-            for (java.lang.ref.WeakReference<Object> ref : sMamlRoots) {
-                Object root = ref.get();
-                if (root != null) {
-                    live.add(root);
-                }
-            }
-        }
-        if (live.isEmpty()) {
-            return;
-        }
-        boolean anyOk = false;
-        String clock = clockText();
-        for (Object root : live) {
-            // 1) Force the renderer's own update. This is the call the theme uses
-            //    when it wants a repaint; an ordinary invalidate() never reaches
-            //    that layer.
-            boolean updateOk = invokeNoArg(root, "requestUpdate");
-            // 2) Simulate a clock tick. The AOD provably repaints on its own time
-            //    updates (the clock keeps running while our requests are ignored),
-            //    so pushing a fresh time value is what actually refreshes the panel.
-            boolean clockOk = invokeWithString(root, "updateDateTimeVariable", clock);
-            if (updateOk || clockOk) {
-                anyOk = true;
-            }
-            if (!sFrameOk && (updateOk || clockOk)) {
-                AodLyricModule.i("AOD repaint via " + (clockOk ? "clock tick" : "requestUpdate")
-                        + " (clock=" + clock + ", roots=" + live.size() + ")");
-            }
-        }
-        if (anyOk) {
-            sFrameOk = true;
-        }
-    }
-
     @Nullable
     private static android.content.Context swapContext() {
         return ModuleReporter.capturedContext();
     }
 
-    @NonNull
-    private static String clockText() {
-        java.util.Calendar c = java.util.Calendar.getInstance();
-        return String.format(java.util.Locale.US, "%02d:%02d",
-                c.get(java.util.Calendar.HOUR_OF_DAY), c.get(java.util.Calendar.MINUTE));
-    }
-
-    private static boolean invokeNoArg(@NonNull Object target, @NonNull String name) {
-        try {
-            java.lang.reflect.Method m = target.getClass().getMethod(name);
-            m.setAccessible(true);
-            m.invoke(target);
-            return true;
-        } catch (Throwable t) {
-            logReflectFailure(name, t);
-            return false;
-        }
-    }
-
-    private static boolean invokeWithString(@NonNull Object target, @NonNull String name,
-                                            @NonNull String arg) {
-        try {
-            java.lang.reflect.Method m = target.getClass().getMethod(name, String.class);
-            m.setAccessible(true);
-            m.invoke(target, arg);
-            return true;
-        } catch (Throwable t) {
-            logReflectFailure(name, t);
-            return false;
-        }
-    }
-
-    private static final java.util.Set<String> sLoggedFailures =
+    static final java.util.Set<String> sLoggedFailures =
             java.util.Collections.synchronizedSet(new java.util.HashSet<String>());
-
-    /** Logs each distinct reflective failure once, with its real cause. */
-    private static void logReflectFailure(@NonNull String name, @NonNull Throwable t) {
-        Throwable cause = t instanceof java.lang.reflect.InvocationTargetException
-                && t.getCause() != null ? t.getCause() : t;
-        String key = name + ":" + cause.getClass().getSimpleName();
-        if (sLoggedFailures.add(key) && sLoggedFailures.size() <= 8) {
-            AodLyricModule.w("reflect " + name + " failed: "
-                    + cause.getClass().getSimpleName() + ": " + cause.getMessage());
-        }
-    }
 
     /** Weak reference to the AOD root, used for invalidation from the kicker. */
     @Nullable
     private static volatile java.lang.ref.WeakReference<ViewGroup> sRootRef;
-
-    /**
-     * Keeps the overlay alive inside the AOD's render path.
-     *
-     * <p>Rationale: the AOD settles into a static low-power state seconds after
-     * lighting up; from then on it does not redraw ordinary views, so new lyric
-     * lines would never appear. Nudging the view (re-attach when detached,
-     * restore visibility, bring to front, invalidate) is enough to keep it in
-     * the redraw path on this ROM.
-     */
-    /**
-     * Walks the AOD view tree and registers the MAML root behind any
-     * MamlView/MiAdvancedView found. Those are the views that actually paint
-     * the theme, so their root is the one whose framerate must be raised.
-     */
-    private static void harvestMamlRoots(@NonNull ViewGroup root) {
-        try {
-            java.util.ArrayDeque<android.view.View> queue = new java.util.ArrayDeque<>();
-            queue.add(root);
-            int guard = 0;
-            while (!queue.isEmpty() && guard++ < 200) {
-                android.view.View v = queue.poll();
-                if (v == null) {
-                    continue;
-                }
-                String cls = v.getClass().getName();
-                if (cls.contains("MamlView") || cls.contains("MiAdvancedView")) {
-                    Object mamlRoot = readField(v, "mRoot");
-                    if (mamlRoot != null) {
-                        AodLyricModule.i("MAML root found in AOD tree: " + cls);
-                        setMamlRoot(mamlRoot);
-                    }
-                }
-                if (v instanceof ViewGroup) {
-                    ViewGroup group = (ViewGroup) v;
-                    for (int i = 0; i < group.getChildCount(); i++) {
-                        queue.add(group.getChildAt(i));
-                    }
-                }
-            }
-        } catch (Throwable t) {
-            AodLyricModule.w("AOD tree harvest failed: " + t);
-        }
-    }
 
     /**
      * Keeps an animation frame running so the AOD window keeps recompositing.
@@ -2515,59 +2244,13 @@ public final class AodOverlayController {
      * the window force the same recomposition.
      */
     @Nullable
-    private static volatile android.animation.ObjectAnimator sRootMotion;
+    static volatile android.animation.ObjectAnimator sRootMotion;
 
     /** True while the AOD touch modes are held on by us. */
     private static volatile boolean sTouchModesOn;
 
-    /**
-     * Enables the display-refresh touch modes MIUI itself uses on touch.
-     *
-     * <p>{@code com.miui.aod.Utils.setTouchMode(touchId, mode, value)} forwards to
-     * Xiaomi's ITouchFeature service:
-     * mode 19 = keep-screen-on (continuous refresh), mode 11 = AOD animate.
-     * Touching the under-display fingerprint sensor turns these on, which is why
-     * the panel refreshes then and freezes otherwise.
-     */
-    /**
-     * Resolves {@code com.miui.aod.Utils}. It lives in MIUIAod.apk, loaded by a
-     * plugin class loader, so the module's own loader cannot see it - walk the
-     * known loaders, then fall back to scanning loaded classes.
-     */
     @Nullable
-    private static Class<?> findUtilsClass() {
-        try {
-            Class<?> cached = sUtilsClass;
-            if (cached != null) {
-                return cached;
-            }
-        } catch (Throwable ignored) {
-        }
-        ClassLoader pluginLoader = sPluginLoader;
-        if (pluginLoader != null) {
-            try {
-                Class<?> c = Class.forName("com.miui.aod.Utils", false, pluginLoader);
-                sUtilsClass = c;
-                return c;
-            } catch (Throwable ignored) {
-            }
-        }
-        // Fall back: the object we already hold came from the plugin loader.
-        Object root = sMamlRoots.isEmpty() ? null : sMamlRoots.get(0).get();
-        if (root != null) {
-            try {
-                Class<?> c = Class.forName("com.miui.aod.Utils", false,
-                        root.getClass().getClassLoader());
-                sUtilsClass = c;
-                return c;
-            } catch (Throwable ignored) {
-            }
-        }
-        return null;
-    }
-
-    @Nullable
-    private static volatile Class<?> sUtilsClass;
+    static volatile Class<?> sUtilsClass;
 
     /** Last time a doze pulse was requested, to avoid spamming the panel. */
     private static volatile long sLastPulseAt;
@@ -2618,8 +2301,13 @@ public final class AodOverlayController {
             return;
         }
         if (now - sLastPulseAt < PULSE_INTERVAL_MS) {
+            // Deferred, not dropped: on fast lyric changes the 4s throttle
+            // used to swallow the pulse entirely and the line never reached
+            // the panel. The kicker re-issues it as soon as the window opens.
+            sPulseWanted = true;
             return;
         }
+        sPulseWanted = false;
         sLastPulseAt = now;
         sPulseJustFired = true;
         try {
@@ -2636,6 +2324,13 @@ public final class AodOverlayController {
                     + ": " + t.getMessage());
         }
     }
+
+    /**
+     * True while a pulse was requested but throttled. The kicker flushes it as
+     * soon as the minimum gap has elapsed, so a burst of fast lines still ends
+     * with the final line painted.
+     */
+    private static volatile boolean sPulseWanted;
 
     private static volatile boolean sPulseLogged;
 
@@ -2694,41 +2389,6 @@ public final class AodOverlayController {
     @Nullable
     private static volatile android.animation.ObjectAnimator sPulse;
 
-    /**
-     * Animates the AOD root by a sub-pixel offset.
-     *
-     * <p>Observed behaviour on this device: lyric text only appears when some AOD
-     * component is already moving. Animating our own child view was not enough,
-     * so the root view itself is put into an animated state - the smallest offset
-     * that still marks the window as animating.
-     */
-    private static void startRootMotion(@NonNull ViewGroup root) {
-        try {
-            stopRootMotion();
-            android.animation.ObjectAnimator motion =
-                    android.animation.ObjectAnimator.ofFloat(root, "translationX", 0f, 0.02f);
-            motion.setDuration(320L);
-            motion.setRepeatCount(android.animation.ValueAnimator.INFINITE);
-            motion.setRepeatMode(android.animation.ValueAnimator.REVERSE);
-            motion.start();
-            sRootMotion = motion;
-            AodLyricModule.i("AOD root motion started (window marked as animating)");
-        } catch (Throwable t) {
-            AodLyricModule.w("AOD root motion failed: " + t);
-        }
-    }
-
-    private static void stopRootMotion() {
-        android.animation.ObjectAnimator motion = sRootMotion;
-        sRootMotion = null;
-        if (motion != null) {
-            try {
-                motion.cancel();
-            } catch (Throwable ignored) {
-            }
-        }
-    }
-
     private static void startPulse(@NonNull TextView tv) {
         try {
             stopPulse();
@@ -2779,6 +2439,23 @@ public final class AodOverlayController {
             }
             try {
                 int tick = sTick.incrementAndGet();
+                // Cost tiers (was: full structural refresh every single second):
+                //   - 1s cadence right after a change, and always while a
+                //     deferred pulse is waiting (fast lyrics must not lag);
+                //   - afterwards only every third tick runs the heavy path.
+                // The pulse animator keeps the panel alive in between, so the
+                // visible behaviour is unchanged while the steady-state main
+                // thread work drops by ~3x.
+                boolean fresh = sPulseWanted
+                        || android.os.SystemClock.elapsedRealtime() - sContentAt < SETTLE_MS;
+                if (!fresh && tick % IDLE_TICK_DIVISOR != 0) {
+                    return;
+                }
+                if (sPulseWanted) {
+                    // Throttled pulse from requestPulse(): flush it now.
+                    requestPulse(swapContext());
+                }
+                boolean heavy = fresh;
                 postOnMain(() -> {
                     try {
                         // Prefer the real parent (the clock container) so a
@@ -2816,12 +2493,13 @@ public final class AodOverlayController {
                         if (pulse == null || !pulse.isRunning()) {
                             startPulse(view);
                         }
-                        view.setText(sLastText == null ? "" : styleTranslationSpan(view, sLastText));
+                        CharSequence content = sLastSpanned;
+                        view.setText(content == null ? "" : content);
                         // Tree mode: the view IS a layout participant holding its
                         // slot; remove+add (reinflate) rebuilt the slot every
                         // second and made the whole AOD jump. The slot is also
                         // the z-order there, so bringToFront must not run either.
-                        if (!treeModeActive()) {
+                        if (heavy && !treeModeActive()) {
                             reinflate(view);
                             ensureFront(view);
                         }
@@ -2841,13 +2519,15 @@ public final class AodOverlayController {
                             }
                         }
                         // Keep the AOD renderer animated; see driveFramerate().
-                        driveFramerate();
+                        if (heavy) {
+                            driveFramerate();
+                        }
                     } catch (Throwable t) {
                         AodLyricModule.w("overlay kick failed: " + t);
                     }
                 });
                 // Bounded state log: proves whether the view is still in the tree.
-                if (tick % 10 == 0) {
+                if (tick % ALIVE_LOG_TICKS == 0) {
                     AodLyricModule.i("overlay alive: attached="
                             + (view.getParent() != null)
                             + " visible=" + (view.getVisibility() == android.view.View.VISIBLE)
@@ -2865,8 +2545,20 @@ public final class AodOverlayController {
                 AodLyricModule.w("overlay kicker iteration failed: " + t);
             }
         }, 1000, 1000, java.util.concurrent.TimeUnit.MILLISECONDS);
-        AodLyricModule.i("overlay kicker started (1s)");
+        AodLyricModule.i("overlay kicker started (1s, adaptive)");
     }
+
+    /** Window after a content change that keeps the 1s heavy cadence. */
+    private static final long SETTLE_MS = 4000L;
+
+    /** When the rendered content last changed (SystemClock.elapsedRealtime). */
+    private static volatile long sContentAt;
+
+    /** Steady-state divisor: heavy refresh every Nth second. */
+    private static final int IDLE_TICK_DIVISOR = 3;
+
+    /** "overlay alive" log cadence (seconds). */
+    private static final int ALIVE_LOG_TICKS = 60;
 
     /**
      * Diagnostic: overlay geometry and the alpha/visibility chain above it.

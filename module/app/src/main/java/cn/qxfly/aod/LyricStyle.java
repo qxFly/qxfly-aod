@@ -58,6 +58,15 @@ public final class LyricStyle {
     /** Pill opacity multiplier, 0..1. */
     public float bgAlpha = 0.45f;
 
+    /** true = show "title - artist" above the lyric. */
+    public boolean showTrack;
+    /** true = show the next line under the lyric, dimmed. */
+    public boolean showNext;
+    /** true = show "1:23 / 3:45" under the lyric. */
+    public boolean showProgress;
+    /** true = keep the line (dimmed) while playback is paused. */
+    public boolean pauseKeep = true;
+
     @NonNull
     public static LyricStyle fromBundle(@Nullable android.os.Bundle b) {
         LyricStyle s = new LyricStyle();
@@ -81,6 +90,10 @@ public final class LyricStyle {
         s.bgEnabled = "1".equals(b.getString(StateKeys.STYLE_BG_ENABLED));
         s.bgColor = parseInt(b.getString(StateKeys.STYLE_BG_COLOR), s.bgColor);
         s.bgAlpha = parseFloat(b.getString(StateKeys.STYLE_BG_ALPHA), s.bgAlpha);
+        s.showTrack = "1".equals(b.getString(StateKeys.STYLE_SHOW_TRACK));
+        s.showNext = "1".equals(b.getString(StateKeys.STYLE_SHOW_NEXT));
+        s.showProgress = "1".equals(b.getString(StateKeys.STYLE_SHOW_PROGRESS));
+        s.pauseKeep = !"0".equals(b.getString(StateKeys.STYLE_PAUSE_KEEP));
         return s;
     }
 
@@ -135,6 +148,10 @@ public final class LyricStyle {
         b.putString(StateKeys.STYLE_BG_ENABLED, bgEnabled ? "1" : "0");
         b.putString(StateKeys.STYLE_BG_COLOR, Integer.toHexString(bgColor));
         b.putString(StateKeys.STYLE_BG_ALPHA, String.valueOf(bgAlpha));
+        b.putString(StateKeys.STYLE_SHOW_TRACK, showTrack ? "1" : "0");
+        b.putString(StateKeys.STYLE_SHOW_NEXT, showNext ? "1" : "0");
+        b.putString(StateKeys.STYLE_SHOW_PROGRESS, showProgress ? "1" : "0");
+        b.putString(StateKeys.STYLE_PAUSE_KEEP, pauseKeep ? "1" : "0");
         return b;
     }
 
