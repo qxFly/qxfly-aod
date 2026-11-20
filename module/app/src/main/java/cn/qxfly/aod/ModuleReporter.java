@@ -30,7 +30,11 @@ public final class ModuleReporter {
     private static volatile Bundle sPendingStatus;
 
     private volatile long mLastLyricPush;
+    private volatile long mLastPlaybackPush;
     private volatile boolean mStatusPushed;
+
+    /** Minimum gap between two playback-metadata pushes (position ticks). */
+    private static final long PLAYBACK_PUSH_GAP_MS = 900L;
 
     /** Minimum gap between deferred-report retries (see flushPendingIfReady). */
     private static final long FLUSH_RETRY_INTERVAL_MS = 5000L;
@@ -198,6 +202,73 @@ public final class ModuleReporter {
     }
 
     /**
+     * Publishes playback metadata (title/artist/next line/duration/position)
+     * without touching the live line.
+     *
+     * <p>Used by the legacy (3.x) receiver: the v4 stream that {@link AppReporter}
+     * relies on never fires against an old service, so without this the
+     * provider's title/next/progress keys stayed unset and the overlay's
+     * optional extra lines had nothing to draw.
+     */
+    public void reportPlayback(@Nullable String title, @Nullable String artist,
+                               @Nullable String next, boolean hasDuration,
+                               long durationMs, boolean hasPosition, long positionMs) {
+        reportPlayback(title, artist, next, hasDuration, durationMs,
+                hasPosition, positionMs, null);
+    }
+
+    /**
+     * Same, with the play state ("playing"/"paused"/...). The legacy payload
+     * carries no state, so the platform media session supplies it.
+     */
+    public void reportPlayback(@Nullable String title, @Nullable String artist,
+                               @Nullable String next, boolean hasDuration,
+                               long durationMs, boolean hasPosition, long positionMs,
+                               @Nullable String playState) {
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (now - mLastPlaybackPush < PLAYBACK_PUSH_GAP_MS) {
+            return;
+        }
+        Context context = context();
+        if (context == null) {
+            return;
+        }
+        boolean hasAny = (title != null && !title.isEmpty())
+                || (artist != null && !artist.isEmpty())
+                || (next != null && !next.isEmpty())
+                || (hasDuration && durationMs > 0)
+                || (hasPosition && positionMs >= 0)
+                || (playState != null && !playState.isEmpty());
+        if (!hasAny) {
+            return;
+        }
+        flushPendingIfReady();
+        mLastPlaybackPush = now;
+        Bundle b = new Bundle();
+        b.putString(StateKeys.TYPE, StateKeys.TYPE_LYRIC);
+        if (title != null && !title.isEmpty()) {
+            b.putString(StateKeys.LYRIC_TITLE, title);
+        }
+        if (artist != null && !artist.isEmpty()) {
+            b.putString(StateKeys.LYRIC_ARTIST, artist);
+        }
+        if (next != null && !next.isEmpty()) {
+            b.putString(StateKeys.LYRIC_NEXT, next);
+        }
+        if (hasDuration && durationMs > 0) {
+            b.putString(StateKeys.LYRIC_DURATION, String.valueOf(durationMs));
+        }
+        if (hasPosition && positionMs >= 0) {
+            b.putString(StateKeys.LYRIC_POSITION, String.valueOf(positionMs));
+            b.putString(StateKeys.LYRIC_POS_AT, String.valueOf(now));
+        }
+        if (playState != null && !playState.isEmpty()) {
+            b.putString(StateKeys.LYRIC_PLAY_STATE, playState);
+        }
+        push(context, b, "playback");
+    }
+
+    /**
      * Playback stopped: clears the whole lyric record in the provider (line,
      * translation AND the full LRC) so no ghost lyrics survive a stop for the
      * overlay or the native theme injection to pick up.
@@ -213,6 +284,7 @@ public final class ModuleReporter {
         b.putString(StateKeys.LYRIC_LINE, "");
         b.putString(StateKeys.LYRIC_TRANSLATION, "");
         b.putString(StateKeys.LYRIC_LRC, "");
+        b.putString(StateKeys.LYRIC_NEXT, "");
         b.putString(StateKeys.LYRIC_INDEX, "-1");
         b.putString(StateKeys.LYRIC_TOTAL, "0");
         b.putString(StateKeys.LYRIC_CHARS, "0");

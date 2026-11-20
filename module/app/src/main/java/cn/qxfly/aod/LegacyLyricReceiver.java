@@ -56,6 +56,21 @@ public final class LegacyLyricReceiver {
         default void onMeta(@Nullable String title, @Nullable String artist,
                             @Nullable String next, int index, int total) {
         }
+
+        /**
+         * Playback metadata carried by the same payload: duration/position (ms)
+         * and the stable lyric id. 3.x services DO fill these (see
+         * {@code LyricDocAdapter.legacyMetadata} in SuperLyric: title, artist,
+         * album, id, duration, position), which is the only place a hook
+         * process can get a progress value when the v4 stream never fires.
+         *
+         * <p>{@code fullPayload} reports whether the payload carries the whole
+         * document ({@code allLyrics}); only then a "next line" exists.
+         */
+        default void onPlayback(@Nullable String lyricId, boolean hasDuration,
+                                long durationMs, boolean hasPosition, long positionMs,
+                                boolean fullPayload, int allCount, int upcomingCount) {
+        }
     }
 
     @Nullable
@@ -158,27 +173,71 @@ public final class LegacyLyricReceiver {
             String artist = data.getArtist();
             int index = data.getCurrentLyricIndex();
             int total = data.getAllLyricsCount();
+            boolean full = false;
+            int upcomingCount = 0;
             String next = null;
             try {
-                if (total > 0 && index >= 0 && index + 1 < total) {
-                    SuperLyricLine after = data.getLyricAt(index + 1);
-                    next = after == null ? null : textOrNull(after.getText());
+                full = data.hasAllLyrics();
+                if (full) {
+                    // Authoritative when the payload is a full document.
+                    java.util.List<SuperLyricLine> upcoming = data.getUpcomingLyrics();
+                    upcomingCount = upcoming == null ? 0 : upcoming.size();
+                    if (upcoming != null) {
+                        for (SuperLyricLine after : upcoming) {
+                            String t = after == null ? null : textOrNull(after.getText());
+                            if (t != null) {
+                                next = t;
+                                break;
+                            }
+                        }
+                    }
                 }
             } catch (Throwable ignored) {
                 // Not every publisher exposes an indexed list.
             }
-            // Meta first: it must refresh even when the line text repeats.
+            if (next == null) {
+                try {
+                    if (total > 0 && index >= 0 && index + 1 < total) {
+                        SuperLyricLine after = data.getLyricAt(index + 1);
+                        next = after == null ? null : textOrNull(after.getText());
+                    }
+                } catch (Throwable ignored) {
+                }
+            }
+            boolean hasDuration = false;
+            long durationMs = -1L;
+            boolean hasPosition = false;
+            long positionMs = -1L;
+            String lyricId = null;
+            try {
+                hasDuration = data.hasDuration();
+                durationMs = hasDuration ? data.getDuration() : -1L;
+                hasPosition = data.hasPosition();
+                positionMs = hasPosition ? data.getPosition() : -1L;
+                lyricId = data.hasLyricId() ? data.getLyricId() : null;
+            } catch (Throwable ignored) {
+            }
+            // Meta/playback first: they must refresh even when the line text
+            // repeats (long lines, position ticks).
             sink.onMeta(title, artist, next, index, total);
+            sink.onPlayback(lyricId, hasDuration, durationMs, hasPosition, positionMs,
+                    full, total, upcomingCount);
 
             if (text != null && text.equals(mLastText)) {
                 return;
             }
             mLastText = text;
-            AodLog.d("legacy lyric: publisher=" + publisher
-                    + " line=" + text
+            AodLog.i("legacy lyric: publisher=" + publisher
+                    + " track=" + title + "/" + artist
+                    + " album=" + safeAlbum(data)
+                    + " idx=" + index + "/" + total
+                    + " full=" + full + " upcoming=" + upcomingCount
+                    + " dur=" + durationMs + " pos=" + positionMs
+                    + " id=" + lyricId
+                    + " secondary=" + hasSecondary(data)
+                    + " extra=" + extraKeys(data)
                     + " translation=" + translation
-                    + " full=" + data.hasAllLyrics()
-                    + " idx=" + index);
+                    + " line=" + text);
             sink.onLine(text, translation, title, artist);
         } catch (Throwable t) {
             AodLog.w("legacy lyric handling failed: " + t);
@@ -193,6 +252,42 @@ public final class LegacyLyricReceiver {
         }
         String t = s.trim();
         return t.isEmpty() ? null : t;
+    }
+
+    /** Diagnostics: album string, or "-". */
+    @NonNull
+    private static String safeAlbum(@NonNull SuperLyricData data) {
+        try {
+            String album = data.getAlbum();
+            return album == null ? "-" : album;
+        } catch (Throwable t) {
+            return "?";
+        }
+    }
+
+    /** Diagnostics: whether a secondary (phonetic) line is present. */
+    @NonNull
+    private static String hasSecondary(@NonNull SuperLyricData data) {
+        try {
+            SuperLyricLine secondary = data.getSecondary();
+            if (secondary == null || secondary.getText() == null) {
+                return "-";
+            }
+            return String.valueOf(secondary.getText().length());
+        } catch (Throwable t) {
+            return "?";
+        }
+    }
+
+    /** Diagnostics: keys of the publisher's extra bundle ("-" when absent). */
+    @NonNull
+    private static String extraKeys(@NonNull SuperLyricData data) {
+        try {
+            android.os.Bundle extra = data.getExtra();
+            return extra == null ? "-" : extra.keySet().toString();
+        } catch (Throwable t) {
+            return "?";
+        }
     }
 
     public void unregister() {

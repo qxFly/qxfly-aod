@@ -82,6 +82,55 @@ public final class SuperLyricSource {
         return mNext;
     }
 
+    // ---- playback metadata from the legacy (3.x) payload ----
+    // The v4 stream (getPosition/getDuration/getPlaybackState) never fires on a
+    // serverApiVersion=0 host, so the legacy payload is the only place this
+    // process can learn the track length and the playing position.
+
+    private volatile long mDurationMs;
+
+    private volatile long mPositionMs = -1L;
+
+    private volatile long mPositionAt;
+
+    private volatile boolean mHasPosition;
+
+    @Nullable
+    private volatile String mLyricId;
+
+    /** Line index / total from the last legacy payload (for the UI report). */
+    private volatile int mIndex = -1;
+    private volatile int mTotal;
+
+    /** Track duration in ms (0 = unknown). */
+    public long durationMs() {
+        return mDurationMs;
+    }
+
+    @Nullable
+    public String lyricId() {
+        return mLyricId;
+    }
+
+    /**
+     * Extrapolated position in ms, or -1 when the payload never carried one.
+     * Play state is not part of the legacy payload, so the caller decides
+     * whether to keep advancing it (see {@link #positionNow(boolean)}).
+     */
+    public long positionNow(boolean playing) {
+        if (!mHasPosition) {
+            return -1L;
+        }
+        long pos = mPositionMs;
+        if (playing) {
+            pos += Math.max(0L, android.os.SystemClock.elapsedRealtime() - mPositionAt);
+        }
+        if (mDurationMs > 0 && pos > mDurationMs) {
+            pos = mDurationMs;
+        }
+        return pos;
+    }
+
     private volatile boolean mRegistered;
 
     /** When this process's own SuperLyric stream last delivered anything
@@ -195,7 +244,7 @@ public final class SuperLyricSource {
                 LyricBridge.markDirty();
                 // ...and to the app UI through the provider.
                 mReporter.reportLyric(mCurrentTitle, text, translation,
-                        "-1", "0", "0");
+                        String.valueOf(mIndex), String.valueOf(mTotal), "0");
             }
 
             @Override
@@ -208,6 +257,31 @@ public final class SuperLyricSource {
                 if (next != null) {
                     mNext = next;
                 }
+                mIndex = index;
+                mTotal = total;
+                LyricBridge.markDirty();
+            }
+
+            @Override
+            public void onPlayback(@Nullable String lyricId, boolean hasDuration,
+                                   long durationMs, boolean hasPosition, long positionMs,
+                                   boolean fullPayload, int allCount, int upcomingCount) {
+                if (lyricId != null) {
+                    mLyricId = lyricId;
+                }
+                if (hasDuration && durationMs > 0) {
+                    mDurationMs = durationMs;
+                }
+                if (hasPosition && positionMs >= 0) {
+                    mPositionMs = positionMs;
+                    mPositionAt = android.os.SystemClock.elapsedRealtime();
+                    mHasPosition = true;
+                }
+                // Mirror into the provider so the app UI's "now playing" /
+                // progress rows show the same values the overlay uses.
+                mReporter.reportPlayback(mTitle, mArtist, mNext,
+                        hasDuration && durationMs > 0, durationMs,
+                        hasPosition && positionMs >= 0, positionMs);
                 LyricBridge.markDirty();
             }
 
@@ -216,6 +290,12 @@ public final class SuperLyricSource {
                 mCurrentLrc = null;
                 mCurrentLine = null;
                 mCurrentTranslation = null;
+                mNext = null;
+                mDurationMs = 0L;
+                mPositionMs = -1L;
+                mHasPosition = false;
+                mIndex = -1;
+                mTotal = 0;
                 mReporter.reportLyricStop();
                 AodOverlayController.setText("");
                 LyricBridge.requestForceEmptyLrc();

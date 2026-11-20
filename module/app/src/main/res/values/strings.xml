@@ -194,9 +194,9 @@
     <string name="style_show_track">显示歌名与歌手</string>
     <string name="style_show_track_summary">在歌词上方显示当前曲目</string>
     <string name="style_show_next">显示下一句</string>
-    <string name="style_show_next_summary">在歌词下方以淡色预览下一句</string>
+    <string name="style_show_next_summary">在歌词下方以淡色预览下一句（需要播放器提供完整歌词；只发送当前句的播放器不会显示）</string>
     <string name="style_show_progress">显示播放进度</string>
-    <string name="style_show_progress_summary">在歌词下方显示「当前 / 总时长」</string>
+    <string name="style_show_progress_summary">在歌词下方显示「当前 / 总时长」，取自系统媒体会话</string>
     <string name="style_pause_keep">暂停时保留歌词</string>
     <string name="style_pause_keep_summary">暂停时把当前歌词变暗保留，而不是直接消失</string>
     <string name="style_preview_track">夜空中最亮的星 · 逃跑计划</string>

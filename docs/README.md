@@ -80,12 +80,16 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1 -Clean
 | 开关 | 效果 |
 |---|---|
 | 显示歌名与歌手 | 歌词上方一行，58% 字号、55% 透明度 |
-| 显示下一句 | 歌词下方淡色预览（`LyricView.getUpcoming()`） |
+| 显示下一句 | 歌词下方淡色预览（`LyricView.getUpcoming()`，或 legacy 全量载荷的下一行） |
 | 显示播放进度 | `1:23 / 4:05`，暂停时追加 `⏸` |
 | 暂停时保留歌词 | 暂停时把当前行降到 55% 透明度保留，而不是消失 |
 
-数据来自 UI 进程的 v4 流（`title/artist/next/position/duration/playState`），
-经 `StateKeys` 新增字段传到两个宿主进程；`ProviderLrcSource` 按播放状态外推当前进度。
+歌名/歌手/下一句来自歌词源：优先本进程 v4 流，其次 legacy（3.x）载荷的
+`title/artist/allLyrics`，最后读 UI 进程经 `StateKeys` 发布的快照。
+**进度与播放状态来自系统 `MediaSession`**（见 8.1.1）：`serverApiVersion=0`
+的旧版 SuperLyric 既不触发 v4 回调，legacy 载荷里也没有 `duration/position`，
+唯一稳定来源是宿主进程（SystemUI，持有 `MEDIA_CONTENT_CONTROL`）直接读
+活动会话的 `PlaybackState` / `MediaMetadata`。
 
 ### 其它
 
@@ -110,6 +114,79 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1 -Clean
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\work\run-tests.ps1
 ```
+
+## 8.1.1：下一句 / 进度实测修复（2026-11-20 第十八轮）
+
+### 现象
+
+外观页开了「下一句」和「播放进度」，息屏上一行都没有；歌名歌手也时有时无。
+
+### 真机取证（不是推测）
+
+Java 进程侧 `SuperLyric.serverApiVersion() == 0` → 这是 **3.x 旧版协议**，
+`LyricListener.onLyric(LyricView)` / `onStop` 之外的所有 v4 回调
+（`getPosition/getDuration/getPlaybackState/getUpcoming`）根本不触发。
+Provider 快照当时是 `lyricNext=` 空、`lyricDuration/lyricPosition/lyricTitle`
+全部 MISSING、`lyricPlayState=stopped`（实际正在播放）。
+
+把 legacy 载荷逐字段打出来后结论更硬：
+
+```
+full=false  upcoming=0  idx=-1/0  dur=-1  pos=-1  id=null
+secondary=-  extra=-  album=…  translation=…
+```
+
+即：`com.salt.music` 的歌词发布端**只发当前句**（连 `allLyrics`、行号、
+时长、位置都没有），所以下一句 / 进度在旧链路上无解。
+
+### 修复
+
+1. **进度改读系统 `MediaSession`**（新文件 `MediaSessionSource`）。
+   宿主是 `com.android.systemui`，已持有 `MEDIA_CONTENT_CONTROL`，
+   `getActiveSessions()` 拿到活动会话后直接读 `PlaybackState`
+   （state / position / speed / lastPositionUpdateTime）与 `MediaMetadata`
+   （duration / title / artist）。读取走 `MediaController` 的本地缓存，
+   1 Hz 轮询不做 binder 往返；会话列表只在当前会话失效或长期终态时才枚举
+   （`MediaController` 无公开 `release()`，频繁枚举会累积回调 binder）。
+2. **歌名歌手优先用歌词源**：legacy 载荷的 `title/artist` 是干净的原始值；
+   部分播放器把 `artist` 写成 `"歌手 - 歌名"`，覆盖只在本地无值时才用，
+   且 `trackLine()` 遇到 `artist.contains(title)` 不再重复拼一遍。
+3. **`ModuleReporter.reportPlayback()`**：把 `title/artist/next/duration/
+   position/posAt/playState` 合并成一条 lyric 上报（900 ms 节流），
+   legacy 接收端与 media session 都往这里写，App 端快照不再是「stopped」。
+4. **`LegacyLyricReceiver.Sink.onPlayback()`**：把 `hasDuration/getDuration`、
+   `hasPosition/getPosition`、`lyricId`、`fullPayload/upcomingCount` 一并传出，
+   顺带把 `getUpcomingLyrics()` 作为下一句的首选来源。
+5. **进度行容错**：`duration<=0` 但位置已知时仍显示 `0:42`，不再整块消失。
+6. **「显示进度」时轮询到手**：AOD 可见且「有行、开了进度」时 poller 每个
+   tick 都刷新（`AodOverlayController.hasContent()`），否则维持 5/10/30s 心跳。
+7. **顺手修掉两个真 bug**：
+   * `hideOverlay()` 在 poll 线程调 `restoreExpandedHeights()` → 
+     `CalledFromWrongThreadException`，容器高度没能还原；现在整体 post 到主线程。
+   * `applyText()` 每帧都 `reinflate()`（remove + add），tree 模式下会让整个
+     AOD 每秒抖一次；现在 tree 模式跳过。
+8. `LyricDisplay` 的渲染签名在开进度时才带位置，进度秒跳不会触发结构性重建。
+
+### 实测（Xiaomi 14 / HyperOS 3 / 品冠《戒心伤》）
+
+息屏上三行同时出现，进度实时跳动：
+
+```
+品冠 - 戒心伤
+有一些爱 一碰就流浪
+2:36 / 3:30
+```
+
+Provider 快照同步为
+`lyricTitle=戒心伤`、`lyricArtist=品冠`、`lyricDuration=210217`、
+`lyricPosition=122494`、`lyricPlayState=playing`。
+
+### 仍然存在的限制（明确写清楚）
+
+**下一句依赖完整歌词文档。** 本机 `com.salt.music` + SuperLyric 3.3 只发
+当前句（`full=false`、无 `allLyrics`、无 `extra`），所以下一句无法凭空生成，
+开关打开也不会显示；换到会发布全量文档的播放器 / 新协议时自动生效。
+外观页该项说明文字已注明这一点。
 
 ## 8.0.0：Miuix 界面（骨架合并）
 
@@ -1397,6 +1474,8 @@ module/
     │   ├── LyricStyle.java            ← 外观配置（字号/颜色/背景…）
     │   ├── LyricDisplay.java          ← 一次渲染的完整模型（行/翻译/下一句/进度）
     │   ├── SuperLyricSource.java      ← SuperLyric 接收端
+    │   ├── LegacyLyricReceiver.java   ← 3.x 原始 AIDL 接收（单行载荷也能用）
+    │   ├── MediaSessionSource.java    ← 系统 MediaSession：进度 / 时长 / 播放状态
     │   ├── ProviderLrcSource.java     ← Provider LRC 来源
     │   ├── AodStateProvider.java      ← cn.qxfly.aod.state
     │   ├── LrcBuilder.java            ← Lyric → LRC

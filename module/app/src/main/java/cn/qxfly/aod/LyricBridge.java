@@ -42,6 +42,15 @@ public final class LyricBridge {
     @Nullable
     private static volatile ProviderLrcSource sProviderLrc;
 
+    /**
+     * Authoritative playback clock. SuperLyric is 3.x on this device
+     * ({@code serverApiVersion=0}), so neither the hook's v4 listener nor the
+     * app's publisher ever produce position/duration/play-state. The platform
+     * MediaSession has all of it and SystemUI holds MEDIA_CONTENT_CONTROL.
+     */
+    @Nullable
+    private static volatile MediaSessionSource sMediaSession;
+
     @Nullable
     private static java.util.concurrent.ScheduledExecutorService sPoller;
 
@@ -99,12 +108,14 @@ public final class LyricBridge {
             // No Context here: install() runs before the host Application
             // exists, so the source resolves it lazily on each refresh.
             sProviderLrc = new ProviderLrcSource();
+            sMediaSession = new MediaSessionSource();
             sPoller = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
                 Thread t = new Thread(r, "aodlyric-lrc-poll");
                 t.setDaemon(true);
                 return t;
             });
             final int[] tick = {0};
+            final long[] lastMediaPush = {0L};
             sPoller.scheduleWithFixedDelay(() -> {
                 try {
                     // Deferred module/status reports: retry here because the
@@ -126,8 +137,38 @@ public final class LyricBridge {
                             sActiveSource == null ? 0 : sActiveSource.lastEventAt());
                     boolean live = lastFeed > 0 && now - lastFeed < 60_000L;
                     int period = live ? 5 : (AodOverlayController.isAodVisible() ? 10 : 30);
-                    if (!dirty && tick[0] % period != 0) {
+                    // A ticking progress row only looks alive if it is polled
+                    // at the same cadence it is drawn: with "show progress" on,
+                    // refresh every tick while the AOD is up.
+                    boolean progress = AodOverlayController.isAodVisible()
+                            && AodOverlayController.progressShown()
+                            && AodOverlayController.hasContent();
+                    if (!dirty && !progress && tick[0] % period != 0) {
                         return;
+                    }
+                    MediaSessionSource media = sMediaSession;
+                    if (media != null) {
+                        Context mediaContext = ModuleReporter.capturedContext();
+                        if (mediaContext == null) {
+                            mediaContext = currentContext();
+                        }
+                        if (mediaContext != null) {
+                            media.refresh(mediaContext);
+                        }
+                        // Mirror the session's clock/state into the provider so
+                        // the app UI shows the same progress the overlay draws
+                        // (and the stale "stopped" state from the app's v4
+                        // publisher stops lying). Throttled: the overlay reads
+                        // the session directly, so the provider only needs a
+                        // coarse sample.
+                        if (media.valid() && now - lastMediaPush[0] >= 5000L) {
+                            lastMediaPush[0] = now;
+                            long mediaPosition = media.positionNow();
+                            mReporter.reportPlayback(null, null, null,
+                                    media.durationMs() > 0, media.durationMs(),
+                                    mediaPosition >= 0, mediaPosition,
+                                    media.stateName());
+                        }
                     }
                     source.refresh();
 
@@ -241,6 +282,38 @@ public final class LyricBridge {
         d.playing = state == null || state.isEmpty()
                 || StateKeys.PLAY_PLAYING.equals(state)
                 || StateKeys.PLAY_BUFFERING.equals(state);
+
+        // The platform session overrides everything playback related: it is
+        // live, per-track and survives a dead/absent SuperLyric v4 stream.
+        MediaSessionSource media = sMediaSession;
+        if (media != null && media.valid()) {
+            long mediaPosition = media.positionNow();
+            if (mediaPosition >= 0) {
+                d.positionMs = mediaPosition;
+            }
+            if (media.durationMs() > 0) {
+                d.durationMs = media.durationMs();
+            }
+            d.paused = media.paused();
+            d.playing = media.playing();
+            // Track info: SuperLyric's payload carries CLEAN raw title/artist
+            // ("歌名" / "歌手"), while some players put "artist - title" into
+            // the ARTIST tag. Only fill from the session when nothing else
+            // knows the track.
+            if (d.title == null || d.title.trim().isEmpty()) {
+                if (media.title() != null || media.artist() != null) {
+                    d.title = media.title();
+                    d.artist = media.artist();
+                }
+            }
+        } else if (local != null && d.positionMs < 0) {
+            // No session (or it is gone): fall back to the legacy payload's
+            // own position sample, which 3.x services do fill in.
+            d.positionMs = local.positionNow(d.playing);
+            if (d.durationMs <= 0) {
+                d.durationMs = local.durationMs();
+            }
+        }
         return d;
     }
 
@@ -251,6 +324,13 @@ public final class LyricBridge {
      * the lyric dead.
      */
     private static boolean isStale(@NonNull ProviderLrcSource source) {
+        MediaSessionSource media = sMediaSession;
+        // A live platform session proves playback is alive even when neither
+        // SuperLyric feed has said anything for a while (long lines, or a host
+        // whose v4 stream never fires at all).
+        if (media != null && media.valid() && media.playing()) {
+            return false;
+        }
         long last = Math.max(source.lastFeedAt(),
                 sActiveSource == null ? 0 : sActiveSource.lastEventAt());
         return last > 0 && System.currentTimeMillis() - last

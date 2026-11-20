@@ -68,6 +68,21 @@ public final class AodOverlayController {
         return sAodVisible;
     }
 
+    /**
+     * True when the style draws the position/duration row. The poller then
+     * refreshes every tick instead of every few seconds, and a new position
+     * value is part of the render signature (see {@code setLyric}).
+     */
+    static boolean progressShown() {
+        LyricStyle style = sStyle;
+        return style != null && style.showProgress;
+    }
+
+    /** True while a line is actually rendered (idle AOD = nothing to tick). */
+    static boolean hasContent() {
+        return sActive && sLastText != null && !sLastText.isEmpty();
+    }
+
     /** Process-wide module interface, for static helpers (touch watch, pulses). */
     @Nullable
     private static volatile XposedInterface sXp;
@@ -1855,8 +1870,11 @@ public final class AodOverlayController {
     /** Removes the overlay from the AOD while nothing is playing. */
     private static void hideOverlay(@NonNull TextView tv) {
         try {
-            restoreTouchedMargin();
+            // The style/layout restore touches real views: it MUST happen on
+            // the host main thread (setLayoutParams from the poll thread threw
+            // CalledFromWrongThread and left the containers expanded).
             postOnMain(() -> {
+                restoreTouchedMargin();
                 tv.setText("");
                 android.view.ViewParent parent = tv.getParent();
                 if (parent instanceof ViewGroup) {
@@ -1933,9 +1951,13 @@ public final class AodOverlayController {
                 appendPart(sb, next, Math.max(10f, baseSp * 0.60f), baseColor, 0.45f, density, true);
             }
         }
-        if (style != null && style.showProgress && d.durationMs > 0 && d.positionMs >= 0) {
-            String progress = LyricDisplay.time(d.positionMs) + " / "
-                    + LyricDisplay.time(d.durationMs);
+        if (style != null && style.showProgress && d.positionMs >= 0
+                && (d.durationMs > 0 || d.positionMs > 0)) {
+            // Duration is optional: an old transport may only give a position,
+            // and showing "0:42" beats showing nothing at all.
+            String progress = d.durationMs > 0
+                    ? LyricDisplay.time(d.positionMs) + " / " + LyricDisplay.time(d.durationMs)
+                    : LyricDisplay.time(d.positionMs);
             if (d.paused) {
                 progress = progress + "  ⏸";
             }
@@ -1957,6 +1979,11 @@ public final class AodOverlayController {
         }
         if (artist.isEmpty() || artist.equals(title)) {
             return title;
+        }
+        // Some players publish the ARTIST tag as "artist - title"; showing
+        // "artist - title - title" would be embarrassing.
+        if (artist.contains(title)) {
+            return artist;
         }
         return artist + " - " + title;
     }
@@ -2008,7 +2035,12 @@ public final class AodOverlayController {
                 // composition buffer and only re-captures after a STRUCTURAL
                 // change. Re-inserting the view forces measure+layout on the
                 // window, which is what makes the new line appear.
-                reinflate(tv);
+                // Tree mode already owns a layout slot: detach/attach there
+                // rebuilt the slot (and made the whole AOD jump), and the
+                // ticking progress row would now do it every second.
+                if (!treeModeActive()) {
+                    reinflate(tv);
+                }
                 ensureFront(tv);
                 tv.requestLayout();
                 tv.invalidate();
