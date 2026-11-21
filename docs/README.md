@@ -105,7 +105,8 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1 -Clean
   `AnchorIds`（锚点 id 折叠规则，纯逻辑）、`ComponentCollector`（组件树枚举）、
   `MamlBridge`（MAML 反射 + 面板刷新杠杆）。
 * **JVM 测试**：`work/run-tests.ps1` 编译并运行 `module/test/java` 下的纯逻辑用例
-  （锚点映射 / LRC 生成 / 渲染签名），共 31 条断言，不引入 JUnit。
+  （锚点映射 / LRC 生成 / 渲染签名 / 歌名交叉校验 / 进度外推），共 56 条断言，
+  不引入 JUnit。
 * **LRC 转义修正**：原来先转义 `<` 再转义 `&`，把 `a<b` 变成 `&amp;lt;`，
   面板于是显示字面量 `&lt;`。现在先 `&` 后 `<`，并有测试覆盖。
 
@@ -187,6 +188,76 @@ Provider 快照同步为
 当前句（`full=false`、无 `allLyrics`、无 `extra`），所以下一句无法凭空生成，
 开关打开也不会显示；换到会发布全量文档的播放器 / 新协议时自动生效。
 外观页该项说明文字已注明这一点。
+
+## 8.1.2：息屏歌词「几秒后不动」取证 + 歌名交叉校验（2026-11-21 第十九轮）
+
+### 现象
+
+息屏歌词、进度走几秒就停住；另外歌名行有时显示**别的歌**（如正在播日文歌，
+标题却是「羽·泉 - 奔跑」）。
+
+### 取证 A：PowerKeeper 因静音暂停音频（环境限制，非代码回归）
+
+7 组对照实验坐实的因果链（设备 Xiaomi 14 / HyperOS 3，播放器 `com.salt.music`）：
+
+```
+STREAM_MUSIC Muted=true (streamVolume=0)
+  → 播放器持续写静音数据
+  → MIUI PowerKeeper: isLongTimeMusicSilent out of time 60S
+  → pauseAudioTracks success (sessionId=249, audioFlag=1 type=5)
+  → 播放位置冻结 → 歌词回调断流 → 息屏画面不动
+```
+
+| 条件 | 结果 |
+|---|---|
+| 静音 + 模块 ON | 12s 后 `pauseAudioTracks`，歌词停 |
+| 静音 + 模块 OFF | 17s 后照样暂停 → **与本模块无关** |
+| 解除静音 + 模块 ON | 120s **0 次暂停**，歌词每 5–7 秒换行，`audioTrackData` 数据健康 |
+| 重新静音 | 30s 再次复现暂停 |
+
+代码侧 `grep AudioManager|setStreamMute|adjustStreamVolume|requestAudioFocus`
+= 0 匹配，模块从不碰音量。**结论：这是环境限制** —— 息屏歌词要正常，
+`STREAM_MUSIC` 必须未静音且音量 > 0。解除静音用
+`input keyevent KEYCODE_VOLUME_UP`（`cmd media_session volume --stream 3 --set 10`
+不会解除 Muted）。
+
+另注：`LegacyLyricReceiver.handleLyric` 的 `mLastText` 去重会静默丢弃重复行，
+「0 条 legacy lyric 日志」≠ 回调断流，要看 `lyricAt` 是否仍在刷新。
+
+### 取证 B：歌名脏数据（两个源都不能单独信）
+
+* **SuperLyric legacy 载荷的曲目信息会滞后**：实际已切到别的歌，载荷仍是
+  `track=奔跑/羽·泉 album=拾伍 重唱集`；
+* **会话 `METADATA_KEY_TITLE` 不是曲名**：`com.salt.music` 把**当前歌词行**
+  写进 TITLE（真机日志 `now playing: 仍想穿越命运浩瀚 / …`，2 秒一变），
+  真实歌手在 `ARTIST` 里（`茅野愛衣 - あの日のままで`）。
+
+### 修复
+
+1. **`TrackInfo.resolve()`（新文件，纯逻辑 + 单测）交叉校验两个源**：
+   * 会话 `ARTIST` 里找不到载荷 `artist` → 载荷元数据属于旧歌，改用会话值；
+     此时若会话 TITLE 只是屏幕上的歌词行（盐歌模式）则**不作曲名**，
+     标题行降级为只显示歌手 —— 宁可少显示，不能显示错歌。
+   * 无矛盾 → 载荷优先（原始值干净），会话只补空，维持原行为。
+   真机验证：息屏中 `dispatch next` 切歌，标题行跟上新曲
+   （`说走就走 [mqms2] - 周杰伦`），不再残留旧曲。
+2. **进度外推加时效上限**（`MediaSessionSource.POSITION_MAX_EXTRAPOLATION_MS
+   = 30s`）：播放器偶发「state=PLAYING 但 `lastPositionUpdateTime` 冻结」，
+   原逻辑会照常按时钟外推，几分钟就把显示顶到 `4:50/4:50` 钉死在结尾；
+   现在超过 30s 的外推一律截断，会话恢复刷新时显示自动纠正。
+3. **测试**：`TrackInfoTest`（9 组场景）+ `MediaSessionSourceTest`（外推边界）
+   共 25 条新断言，`work/run-tests.ps1` 56 条全过。
+
+### 实测（切歌前后息屏截图，间隔 15s）
+
+```
+切歌前：茅野愛衣 - あの日のままで / スカート揺れる浜辺 / 0:31 / 5:33
+切歌后：说走就走 [mqms2] - 周杰伦 / SP : Universal Music… / 0:16 / 4:26
++15s ：说走就走 [mqms2] - 周杰伦 / 你的侧脸逆着光 背对夕阳 / 0:32 / 4:26
+```
+
+标题、歌词行、进度三者同步更新，`pauseAudioTracks` 计数 0、
+`lyric poll iteration failed` 0。
 
 ## 8.0.0：Miuix 界面（骨架合并）
 

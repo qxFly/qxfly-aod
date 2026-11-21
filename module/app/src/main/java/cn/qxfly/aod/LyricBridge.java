@@ -296,16 +296,17 @@ public final class LyricBridge {
             }
             d.paused = media.paused();
             d.playing = media.playing();
-            // Track info: SuperLyric's payload carries CLEAN raw title/artist
-            // ("歌名" / "歌手"), while some players put "artist - title" into
-            // the ARTIST tag. Only fill from the session when nothing else
-            // knows the track.
-            if (d.title == null || d.title.trim().isEmpty()) {
-                if (media.title() != null || media.artist() != null) {
-                    d.title = media.title();
-                    d.artist = media.artist();
-                }
-            }
+            // Track info: neither source is trustworthy alone (see TrackInfo).
+            // The payload can name a STALE track (盐歌 keeps publishing the
+            // previous song), while some players put the CURRENT LYRIC LINE
+            // into METADATA_KEY_TITLE. resolve() cross-checks the two: a
+            // payload artist contradicted by the session's artist is stale and
+            // loses; a session title that just repeats a line never wins.
+            TrackInfo info = TrackInfo.resolve(d.title, d.artist,
+                    media.title(), media.artist(),
+                    d.line, source.displayLine());
+            d.title = info.title;
+            d.artist = info.artist;
         } else if (local != null && d.positionMs < 0) {
             // No session (or it is gone): fall back to the legacy payload's
             // own position sample, which 3.x services do fill in.

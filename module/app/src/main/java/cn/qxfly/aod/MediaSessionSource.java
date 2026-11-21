@@ -38,6 +38,15 @@ public final class MediaSessionSource {
     /** Don't post another enumeration more often than this when it fails. */
     private static final long REFRESH_RETRY_MS = 5_000L;
 
+    /**
+     * Cap on how far a PLAYING position may be extrapolated past the session's
+     * {@code lastPositionUpdateTime}. Players do stall with a frozen timestamp
+     * while still claiming STATE_PLAYING (盐歌 self-stalls; PowerKeeper muting
+     * the stream) - without a cap the display raced the clock to the end of the
+     * song and pinned at "4:50/4:50" while nothing was advancing.
+     */
+    static final long POSITION_MAX_EXTRAPOLATION_MS = 30_000L;
+
     @NonNull
     private volatile List<MediaController> mControllers = Collections.emptyList();
 
@@ -107,14 +116,8 @@ public final class MediaSessionSource {
             mValid = true;
             mState = name(state.getState());
             mSpeed = state.getPlaybackSpeed();
-            long base = state.getPosition();
-            long updatedAt = state.getLastPositionUpdateTime();
-            long elapsed = updatedAt > 0 ? Math.max(0L, now - updatedAt) : 0L;
-            long position = base;
-            if (state.getState() == PlaybackState.STATE_PLAYING && mSpeed > 0f) {
-                position += (long) (elapsed * mSpeed);
-            }
-            mPositionMs = Math.max(0L, position);
+            mPositionMs = extrapolate(state.getPosition(), state.getLastPositionUpdateTime(),
+                    mSpeed, state.getState() == PlaybackState.STATE_PLAYING, now);
             mSampleAt = now;
 
             long duration = metadata == null ? 0L
@@ -146,6 +149,28 @@ public final class MediaSessionSource {
             mValid = false;
             AodLog.d("media session read failed: " + t);
         }
+    }
+
+    /**
+     * Pure position math: advance a session's base position to {@code now} by
+     * its speed, but only while PLAYING and never more than
+     * {@link #POSITION_MAX_EXTRAPOLATION_MS} past the last position update -
+     * a frozen {@code lastPositionUpdateTime} must stop the clock instead of
+     * extrapolating to the end of the song. Package-private for the JVM tests.
+     */
+    static long extrapolate(long base, long updatedAt, float speed,
+                            boolean playing, long now) {
+        long position = Math.max(0L, base);
+        if (!playing || updatedAt <= 0L || speed <= 0f) {
+            return position;
+        }
+        long elapsed = now - updatedAt;
+        if (elapsed < 0L) {
+            elapsed = 0L;
+        } else if (elapsed > POSITION_MAX_EXTRAPOLATION_MS) {
+            elapsed = POSITION_MAX_EXTRAPOLATION_MS;
+        }
+        return position + (long) (elapsed * speed);
     }
 
     /**
