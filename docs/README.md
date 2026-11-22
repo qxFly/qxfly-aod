@@ -259,6 +259,64 @@ STREAM_MUSIC Muted=true (streamVolume=0)
 标题、歌词行、进度三者同步更新，`pauseAudioTracks` 计数 0、
 `lyric poll iteration failed` 0。
 
+## 8.1.3：面板冻结真因修复（2026-11-22 第二十轮）
+
+8.1.2 解决了「数据不动」，但还剩一个更隐蔽的问题：**数据一直在更新，物理屏
+却停在某一帧不动**。`screencap` 截图里歌词在变，肉眼却看不到刷新。
+
+### 根因链
+
+```
+AOD 稳定后 → 显示状态被钉在 DOZE_SUSPEND(4)
+           → 合成器不再向物理屏送帧（缓冲区仍在更新，screencap 因此照旧）
+pulse 广播 → 被 AOSP DozeTriggers.requestPulse 的守卫丢弃
+           （mPulsePending / mAllowPulseTriggers / canPulse()）
+我们的 doze 守卫 → 挂在 com.miui.aod.doze.DozeMachine，该类从未被加载
+```
+
+关键认知修正：真正运行的 doze 服务是 SystemUI 的
+`com.android.keyguard.doze.MiuiDozeService`（用 SystemUI 内置 AOSP
+`com.android.systemui.doze.DozeMachine`），AOD 插件里的
+`com.miui.aod.doze.DozeMachine` 根本不参与。
+
+### 修复：播放期间把 `DOZE_SUSPEND` 改写成 `DOZE`
+
+AOSP 为「不支持 doze-suspend 的屏幕」自带 `DozeSuspendScreenStatePreventingAdapter`，
+做法就是 `if (state == 4) state = 3`。照搬，但加播放门控：
+
+| 组件 | 作用 |
+|---|---|
+| hook `android.service.dreams.DreamService.setDozeScreenState(int)` | 唯一拦截点（`MiuiDozeService` 继承 `DreamService` 且未覆写） |
+| hook `MiuiDozeService.onCreate` | 提前捕获服务实例，不必等分钟边界 |
+| hook `DozeMachine.<init>` | 捕获状态机，读 `mState` 决定释放时是否恢复 4 |
+| `sSelfApply` 标记 | 区分自身调用与机器请求，避免周期性重申污染簿记 |
+
+「欠恢复」不能用简单布尔：我们改写后机器认为已经设过 4，不会再请求，清标记
+就会永久停在 `DOZE`。所以恢复前读机器状态，仅当 `DOZE_AOD_PAUSED` 时才发 4。
+
+小米触控特性 `mode 19 (keep-screen-on)` / `mode 11 (aod-animate)` 实测
+**不改变电源状态**（`setTouchMode` 还是 PRIVATE STATIC，需要
+`getDeclaredMethod` + `setAccessible`），保留作辅助，不指望它。
+
+### 真机实测（Xiaomi 14 / Android 16 / HyperOS 3）
+
+| 场景 | `Display State` | 10 秒帧数（`dumpsys gfxinfo com.android.systemui`） |
+|---|---|---|
+| 播放 + 息屏 | `DOZE`，跨分钟边界不掉 | **+1150（约 115 fps）** |
+| 暂停 + 息屏 | `DOZE_SUSPEND` | **0** |
+
+日志：
+
+```
+AodLyric: doze service captured: com.android.keyguard.doze.MiuiDozeService
+AodLyric: panel hold: DOZE_SUSPEND -> DOZE
+AodLyric: panel state -> DOZE
+AodLyric: overlay idle (no lyric)
+AodLyric: panel state -> DOZE_SUSPEND
+```
+
+省电行为符合预期：只有播放期间保持 `DOZE`，暂停/空闲立刻交还面板自刷新。
+
 ## 8.0.0：Miuix 界面（骨架合并）
 
 `miuix/` 下的 Miuix 模板骨架（Miuix 0.9.4 + Compose，Gradle 构建）已合并进主模块：
@@ -1341,6 +1399,70 @@ pulse 会驱动一次 **doze 状态转换**，状态转换才让面板重新合�
 而在 doze 状态机。任何 View 级别的重绘请求都会被缓存层吃掉。
 
 6.0.0 只保留 pulse（歌词变化时触发，2s 节流），其余全部移除以节省功耗。
+
+## 6.1.0 面板冻结真因：`DOZE_SUSPEND`（推翻「只能靠 pulse」）
+
+6.0.0 的结论只对了一半：pulse 能触发一次重新合成，但**面板大多数时间是
+`DOZE_SUSPEND`，此时合成器根本不再送帧**。pulse 广播又被 AOSP 的
+`DozeTriggers.requestPulse` 守卫（`mPulsePending` / `mAllowPulseTriggers` /
+`canPulse()`）丢掉，于是「几秒后就不动」。
+
+### 取证链
+
+| 观察 | 命令 | 结果 |
+|---|---|---|
+| 显示状态 | `dumpsys display \| Select-String "Display State="` | 稳定为 `DOZE_SUSPEND`（4） |
+| pulse 是否到达状态机 | `logcat \| Select-String DozeTriggers` | 每分钟 `Received pulse intent`，但状态机无 `doze state ->` 迁移 |
+| 面板是否出新帧 | `dumpsys gfxinfo com.android.systemui \| Select-String "Total frames rendered"` | 冻结期 10s **0 帧** |
+| 窗口缓冲区是否更新 | `screencap` 截图 | **内容一直在变** ← 假象来源 |
+
+`screencap` 读的是 SurfaceFlinger 的缓冲区，所以看起来「歌词在刷新」，
+但 `DOZE_SUSPEND` 下缓冲区的新内容永远不送往物理屏。
+
+### 修复：把 `DOZE_SUSPEND` 改写成 `DOZE`
+
+AOSP 自带给「不支持 doze-suspend 的屏幕」用的适配器
+`DozeSuspendScreenStatePreventingAdapter`，做法就是把 4 改写成 3。我们照做，
+且只在歌词播放期间生效：
+
+```
+hook android.service.dreams.DreamService.setDozeScreenState(int)
+  ├─ 捕获 doze 服务实例（MiuiDozeService，继承 DreamService，无覆写 → 唯一拦截点）
+  ├─ 歌词播放中：state 4(DOZE_SUSPEND) → 3(DOZE)，记录「欠恢复」
+  └─ 播放停止：按 DozeMachine.mState 判断是否该恢复 4
+```
+
+补充说明：
+
+- hook `MiuiDozeService.onCreate` 提前拿到服务实例，不必等分钟边界。
+- hook `DozeMachine.<init>` 捕获状态机，读 `mState` 字段决定是否恢复：
+  我们改写后机器认为「已经设过 4」不会再请求，单纯清标记会永久停在 `DOZE`。
+- `sSelfApply` 标记区分「我们自己的调用」与「机器的请求」，避免周期性重申
+  `DOZE` 时污染「欠恢复」簿记。
+- 小米触控特性 `mode 19 (keep-screen-on)` / `mode 11 (aod-animate)`
+  实测**不改变电源状态**，仅保留作辅助。
+
+### 真机实测（Xiaomi 14 / Android 16 / HyperOS 3）
+
+| 场景 | Display State | 10 秒帧数 |
+|---|---|---|
+| 播放 + 息屏 | `DOZE`（跨分钟边界不掉） | **+1150** |
+| 暂停 + 息屏 | `DOZE_SUSPEND` | **0** |
+
+日志特征：
+
+```
+AodLyric: doze service captured: com.android.keyguard.doze.MiuiDozeService
+AodLyric: panel hold: DOZE_SUSPEND -> DOZE
+AodLyric: panel state -> DOZE
+AodLyric: overlay idle (no lyric)
+AodLyric: panel state -> DOZE_SUSPEND
+```
+
+**另一个易错点**：真正运行的 doze 服务是 SystemUI 的
+`com.android.keyguard.doze.MiuiDozeService`（用 SystemUI 内置 AOSP
+`com.android.systemui.doze.DozeMachine`）；AOD 插件里的
+`com.miui.aod.doze.DozeMachine` **从未被加载**，hook 它没有任何效果。
 
 ## 3.0.0 自绘歌词视图（路线 C，任意息屏样式可用）
 

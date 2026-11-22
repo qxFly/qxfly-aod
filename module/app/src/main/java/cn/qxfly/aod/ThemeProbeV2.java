@@ -224,6 +224,15 @@ public final class ThemeProbeV2 {
         probeAlreadyLoaded(TARGET_DOZE_MACHINE);
         probeAlreadyLoaded(TARGET_COMMON_UTILS);
         probeAlreadyLoaded(TARGET_ROOT);
+
+        // The display-state lever. MIUI parks the AOD panel in DOZE_SUSPEND,
+        // where the compositor stops sending frames: text written into the
+        // window buffer never reaches the physical screen (screencap still
+        // reads the buffer, which is why it looked like it worked). While a
+        // lyric is live we remap that state to DOZE - exactly what MIUI's own
+        // DozeSuspendScreenStatePreventingAdapter does on devices without
+        // suspend support - so the panel keeps compositing our updates.
+        hookDreamDozeState();
     }
 
     /**
@@ -613,5 +622,253 @@ public final class ThemeProbeV2 {
         } catch (Throwable t) {
             AodLog.w("addElement hook unavailable: " + t);
         }
+    }
+
+    // ── panel refresh hold (DOZE_SUSPEND -> DOZE) ───────────────────────
+    //
+    // AOD power states: DOZE (3) keeps the display on and compositing, so new
+    // frames reach the panel; DOZE_SUSPEND (4) hands the image to the panel's
+    // own self-refresh and the compositor stops sending frames. MIUI parks the
+    // AOD in DOZE_SUSPEND a few seconds after it settles, which is why lyric
+    // text (and even the progress clock) froze on the physical screen while
+    // screencap kept returning fresh buffers.
+    //
+    // AOSP ships DozeSuspendScreenStatePreventingAdapter for devices that
+    // cannot doze-suspend: it rewrites 4 -> 3. We do the same, but only while
+    // a lyric is actually playing, and we restore 4 when playback stops so the
+    // panel goes back to its low-power cadence.
+
+    /** Display.STATE_DOZE - screen on, dozing, compositing. */
+    private static final int STATE_DOZE = 3;
+    /** Display.STATE_DOZE_SUSPEND - panel self-refresh, no new frames. */
+    private static final int STATE_DOZE_SUSPEND = 4;
+
+    /** True while the lyric overlay wants continuous panel refresh. */
+    private static volatile boolean sPanelAwake;
+
+    /** The live doze DreamService (MiuiDozeService), captured from the hook. */
+    @Nullable
+    private static volatile Object sDreamService;
+
+    /** The live SystemUI DozeMachine, captured from its constructor. */
+    @Nullable
+    private static volatile Object sDozeMachine;
+
+    /** Cached {@code DozeMachine.mState} field. */
+    @Nullable
+    private static volatile java.lang.reflect.Field sDozeStateField;
+
+    /** True when we rewrote a suspend request to DOZE and owe a restore. */
+    private static volatile boolean sSuspendRemapped;
+
+    /**
+     * True while our own {@code setDozeScreenState} call is in flight. The hook
+     * must not treat it as a machine request, otherwise our periodic re-assert
+     * (always DOZE) would clear the "owe a restore" bookkeeping.
+     */
+    private static volatile boolean sSelfApply;
+
+    /** One-shot guards so a failing lever cannot spam the log. */
+    private static final java.util.concurrent.atomic.AtomicBoolean sDozeHookWarned =
+            new java.util.concurrent.atomic.AtomicBoolean();
+    private static final java.util.concurrent.atomic.AtomicBoolean sDozeApplyWarned =
+            new java.util.concurrent.atomic.AtomicBoolean();
+
+    /**
+     * Asks for (or releases) the continuous-refresh hold.
+     *
+     * @param force re-assert even when the requested state did not change: the
+     *              doze machine can move the display behind our back.
+     */
+    public static void setPanelAwake(boolean awake, boolean force) {
+        boolean changed = sPanelAwake != awake;
+        sPanelAwake = awake;
+        if (!awake) {
+            if (changed) {
+                restoreSuspend();
+            }
+            return;
+        }
+        if (changed || force) {
+            requestDoze();
+        }
+    }
+
+    /** True while the hold is on (used by diagnostics). */
+    public static boolean isPanelAwake() {
+        return sPanelAwake;
+    }
+
+    /**
+     * Hooks {@code DreamService.setDozeScreenState(int)} - the single funnel
+     * every doze display-state change goes through (MiuiDozeService inherits
+     * it from DreamService, so there is no SystemUI override to hook).
+     */
+    private void hookDreamDozeState() {
+        try {
+            Class<?> dream = Class.forName("android.service.dreams.DreamService");
+            java.lang.reflect.Method m = dream.getDeclaredMethod(
+                    "setDozeScreenState", int.class);
+            m.setAccessible(true);
+            AodLyricModule.buildHook(mXp, m, "aodlyric-dream-doze-state")
+                    .intercept(chain -> {
+                        Object self = chain.getThisObject();
+                        Object arg = chain.getArg(0);
+                        if (!(arg instanceof Integer)) {
+                            return chain.proceed();
+                        }
+                        int state = (Integer) arg;
+                        if (self != null && self.getClass().getName().contains("Doze")) {
+                            noteDreamService(self);
+                        }
+                        // Our own call: no machine bookkeeping, no remap.
+                        if (sSelfApply) {
+                            return chain.proceed();
+                        }
+                        if (state == STATE_DOZE_SUSPEND) {
+                            if (sPanelAwake) {
+                                sSuspendRemapped = true;
+                                AodLog.i("panel hold: DOZE_SUSPEND -> DOZE");
+                                return chain.proceed(new Object[]{STATE_DOZE});
+                            }
+                            sSuspendRemapped = false;
+                        } else if (state == STATE_DOZE) {
+                            sSuspendRemapped = false;
+                        }
+                        return chain.proceed();
+                    });
+            AodLog.i("hooked DreamService.setDozeScreenState (panel refresh hold)");
+        } catch (Throwable t) {
+            if (sDozeHookWarned.compareAndSet(false, true)) {
+                AodLog.w("DreamService.setDozeScreenState hook failed: " + t);
+            }
+        }
+
+        // Capture the service as soon as the dream starts, so the hold works
+        // immediately instead of waiting for the next system-initiated
+        // display-state change (the minute tick).
+        try {
+            Class<?> miui = Class.forName("com.android.keyguard.doze.MiuiDozeService",
+                    false, mHostLoader);
+            java.lang.reflect.Method onCreate = miui.getDeclaredMethod("onCreate");
+            onCreate.setAccessible(true);
+            AodLyricModule.buildHook(mXp, onCreate, "aodlyric-doze-service-capture")
+                    .intercept(chain -> {
+                        noteDreamService(chain.getThisObject());
+                        return chain.proceed();
+                    });
+            AodLog.i("hooked MiuiDozeService.onCreate (doze service capture)");
+        } catch (Throwable t) {
+            AodLog.i("MiuiDozeService capture hook skipped: " + t);
+        }
+
+        // The machine's state tells us what the display SHOULD be. Without it
+        // the restore has to guess: after we rewrite one suspend request the
+        // machine believes the display already is DOZE_SUSPEND and never asks
+        // again, so a release would leave the panel compositing (and draining
+        // battery) long after playback stopped.
+        try {
+            Class<?> machine = Class.forName("com.android.systemui.doze.DozeMachine",
+                    false, mHostLoader);
+            sDozeStateField = machine.getDeclaredField("mState");
+            sDozeStateField.setAccessible(true);
+            for (java.lang.reflect.Constructor<?> c : machine.getDeclaredConstructors()) {
+                c.setAccessible(true);
+                AodLyricModule.buildHook(mXp, c, "aodlyric-doze-machine-capture")
+                        .intercept(chain -> {
+                            Object result = chain.proceed();
+                            Object self = chain.getThisObject();
+                            if (self != null) {
+                                sDozeMachine = self;
+                                AodLog.i("doze machine captured: "
+                                        + self.getClass().getName());
+                            }
+                            return result;
+                        });
+            }
+            AodLog.i("hooked DozeMachine <init> (doze state capture)");
+        } catch (Throwable t) {
+            AodLog.w("DozeMachine capture hook failed: " + t);
+        }
+    }
+
+    /** Records the live doze service, replacing a stale one from a past cycle. */
+    private static void noteDreamService(@Nullable Object self) {
+        if (self == null || self == sDreamService) {
+            return;
+        }
+        sDreamService = self;
+        sSuspendRemapped = false;
+        AodLog.i("doze service captured: " + self.getClass().getName());
+        if (sPanelAwake) {
+            // The panel may already be parked in DOZE_SUSPEND; nudge it after
+            // the dream window has had a moment to attach.
+            mainHandler().postDelayed(ThemeProbeV2::requestDoze, 600L);
+        }
+    }
+
+    /** Puts the captured doze display into DOZE (compositing) now. */
+    private static void requestDoze() {
+        applyDozeState(STATE_DOZE);
+    }
+
+    /** Hands the panel back to self-refresh after the hold is released. */
+    private static void restoreSuspend() {
+        if (!machineWantsSuspend()) {
+            sSuspendRemapped = false;
+            return;
+        }
+        sSuspendRemapped = false;
+        applyDozeState(STATE_DOZE_SUSPEND);
+    }
+
+    /**
+     * True when the doze machine's current state maps to a suspended display
+     * (AOSP: DOZE_AOD_PAUSED -&gt; STATE_DOZE_SUSPEND) or when no machine has
+     * been captured yet but we know we rewrote a suspend request.
+     */
+    private static boolean machineWantsSuspend() {
+        Object machine = sDozeMachine;
+        java.lang.reflect.Field field = sDozeStateField;
+        if (machine != null && field != null) {
+            try {
+                Object state = field.get(machine);
+                if (state instanceof Enum) {
+                    String name = ((Enum<?>) state).name();
+                    return "DOZE_AOD_PAUSED".equals(name);
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        return sSuspendRemapped;
+    }
+
+    /**
+     * Invokes {@code setDozeScreenState} on the captured service, on the main
+     * thread (the window plumbing expects it).
+     */
+    private static void applyDozeState(int state) {
+        final Object svc = sDreamService;
+        if (svc == null) {
+            return;
+        }
+        mainHandler().post(() -> {
+            try {
+                java.lang.reflect.Method m = svc.getClass()
+                        .getMethod("setDozeScreenState", int.class);
+                sSelfApply = true;
+                try {
+                    m.invoke(svc, state);
+                } finally {
+                    sSelfApply = false;
+                }
+                AodLog.i("panel state -> " + (state == STATE_DOZE ? "DOZE" : "DOZE_SUSPEND"));
+            } catch (Throwable t) {
+                sSelfApply = false;
+                if (sDozeApplyWarned.compareAndSet(false, true)) {
+                    AodLog.w("setDozeScreenState(" + state + ") failed: " + t);
+                }
+            }
+        });
     }
 }
