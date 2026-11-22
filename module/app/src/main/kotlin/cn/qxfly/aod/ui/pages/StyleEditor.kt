@@ -87,6 +87,8 @@ data class StyleDraft(
     val bgColor: Int = 0xFF000000.toInt(),
     /** 背景色块不透明度 0..1。 */
     val bgAlpha: Float = 0.45f,
+    /** 背景色块圆角（dp），0 = 直角。 */
+    val bgRadiusDp: Float = 24f,
     /** true = 在歌词上方显示歌名与歌手。 */
     val showTrack: Boolean = false,
     /** true = 在歌词下方淡色显示下一句。 */
@@ -114,6 +116,7 @@ internal fun LyricStyle.toDraft() = StyleDraft(
     bgEnabled = bgEnabled,
     bgColor = bgColor,
     bgAlpha = bgAlpha,
+    bgRadiusDp = bgRadiusDp,
     showTrack = showTrack,
     showNext = showNext,
     showProgress = showProgress,
@@ -137,6 +140,7 @@ internal fun StyleDraft.toLyricStyle() = LyricStyle().apply {
     bgEnabled = this@toLyricStyle.bgEnabled
     bgColor = this@toLyricStyle.bgColor
     bgAlpha = this@toLyricStyle.bgAlpha
+    bgRadiusDp = this@toLyricStyle.bgRadiusDp
     showTrack = this@toLyricStyle.showTrack
     showNext = this@toLyricStyle.showNext
     showProgress = this@toLyricStyle.showProgress
@@ -447,6 +451,16 @@ internal fun StyleEditorCard(data: ModuleData) {
                 fromInput = { it.trim().removeSuffix("%").trim().toFloatOrNull()?.div(100f) },
                 onChange = { draft = draft.copy(bgAlpha = it) },
             )
+            SliderRow(
+                label = stringResource(R.string.style_bg_radius),
+                value = draft.bgRadiusDp,
+                range = 0f..40f,
+                defaultValue = 24f,
+                format = { "${it.toInt()} dp" },
+                toInput = { it.toInt().toString() },
+                fromInput = { it.trim().removeSuffix("dp").trim().toFloatOrNull() },
+                onChange = { draft = draft.copy(bgRadiusDp = it) },
+            )
         }
 
         Spacer(Modifier.height(10.dp))
@@ -712,6 +726,7 @@ private fun applyPreset(draft: StyleDraft, preset: Preset): StyleDraft = when (p
         bgEnabled = true,
         bgColor = 0xFF000000.toInt(),
         bgAlpha = 0.45f,
+        bgRadiusDp = 24f,
     )
 }
 
@@ -750,6 +765,7 @@ private fun StyleDraft.toJson(): String = org.json.JSONObject().apply {
     put("bgEnabled", bgEnabled)
     put("bgColor", bgColor)
     put("bgAlpha", bgAlpha.toDouble())
+    put("bgRadiusDp", bgRadiusDp.toDouble())
     put("showTrack", showTrack)
     put("showNext", showNext)
     put("showProgress", showProgress)
@@ -778,6 +794,7 @@ private fun draftFromJson(raw: String): StyleDraft? = runCatching {
         bgEnabled = o.optBoolean("bgEnabled", false),
         bgColor = o.optInt("bgColor", 0xFF000000.toInt()),
         bgAlpha = o.optDouble("bgAlpha", 0.45).toFloat(),
+        bgRadiusDp = o.optDouble("bgRadiusDp", 24.0).toFloat(),
         showTrack = o.optBoolean("showTrack", false),
         showNext = o.optBoolean("showNext", false),
         showProgress = o.optBoolean("showProgress", false),
@@ -840,7 +857,7 @@ private fun StylePreview(draft: StyleDraft) {
     // 背景色块：开启时贴着文字画一个圆角矩形（Hook 侧为整体面板）。
     val bgModifier = if (draft.bgEnabled) {
         Modifier
-            .clip(RoundedCornerShape(24.dp))
+            .clip(RoundedCornerShape(draft.bgRadiusDp.coerceIn(0f, 40f).dp))
             .background(Color(draft.bgColor).copy(alpha = draft.bgAlpha))
             .padding(horizontal = 14.dp, vertical = 6.dp)
     } else {

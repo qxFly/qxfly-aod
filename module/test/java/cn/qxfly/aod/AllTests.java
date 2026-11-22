@@ -13,6 +13,7 @@ public final class AllTests {
         AnchorIdsTest.run();
         LrcBuilderTest.run();
         LyricDisplayTest.run();
+        LyricStyleTest.run();
         TrackInfoTest.run();
         MediaSessionSourceTest.run();
         System.exit(T.report());

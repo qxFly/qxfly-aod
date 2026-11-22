@@ -1379,7 +1379,8 @@ public final class AodOverlayController {
         if (tv instanceof LyricTextView) {
             ((LyricTextView) tv).setStroke(style.strokeWidth, style.strokeColor);
             ((LyricTextView) tv).setLyricBackground(
-                    style.bgEnabled, style.bgColor, style.bgAlpha);
+                    style.bgEnabled, style.bgColor, style.bgAlpha,
+                    style.resolvedBgRadiusDp());
         }
         tv.setTranslationY(0f);
     }
@@ -1797,12 +1798,22 @@ public final class AodOverlayController {
     private static float sTapDownX, sTapDownY;
     private static long sLastTapAt;
     private static float sLastTapX, sLastTapY;
+    /** Last time the touch-arrival diagnostic was logged (ms, uptime). */
+    private static long sTouchDiagAt;
 
     private static void watchDoubleTap(@NonNull android.view.MotionEvent ev,
                                        @NonNull android.view.View view) {
         final int action = ev.getActionMasked();
         final long now = android.os.SystemClock.uptimeMillis();
         if (action == android.view.MotionEvent.ACTION_DOWN) {
+            // Diagnostic: proves whether touches still reach the AOD container
+            // while we hold the panel in DOZE. Throttled to one line per second
+            // so a normal tap gesture cannot flood the log.
+            if (ThemeProbeV2.isPanelAwake() && now - sTouchDiagAt > 1000L) {
+                sTouchDiagAt = now;
+                AodLyricModule.i("AOD touch down while holding DOZE ("
+                        + (int) ev.getX() + "," + (int) ev.getY() + ")");
+            }
             sTapDownAt = now;
             sTapDownX = ev.getX();
             sTapDownY = ev.getY();
@@ -2333,6 +2344,21 @@ public final class AodOverlayController {
         if (context == null) {
             return;
         }
+        // While we hold the panel in DOZE the compositor is already delivering
+        // every frame, so a pulse buys nothing - and it actively breaks touch:
+        // the pulse drives the doze machine into REQUEST_PULSE/PULSING/
+        // PULSE_DONE, where a PowerManager.wakeUp() issued by our double-tap
+        // detector is swallowed. On device that showed up as "double-tap does
+        // nothing for a second or two after every lyric update".
+        if (ThemeProbeV2.isPanelAwake()) {
+            sPulseWanted = false;
+            if (!sPulseSkippedLogged) {
+                sPulseSkippedLogged = true;
+                AodLyricModule.i("doze pulse skipped while panel is held in DOZE"
+                        + " (frames flow anyway; pulses swallow double-tap wake)");
+            }
+            return;
+        }
         // Suppress pulses near any touch. A pulse drives a doze state transition;
         // firing one while the under-display fingerprint handshake is starting
         // makes the panel flash and kills the AOD UI. Two independent guards:
@@ -2385,6 +2411,9 @@ public final class AodOverlayController {
     private static volatile boolean sPulseWanted;
 
     private static volatile boolean sPulseLogged;
+
+    /** One-shot so the "pulse skipped" note does not spam the log. */
+    private static volatile boolean sPulseSkippedLogged;
 
     /** True while the screen is awake (touched, lit, or being unlocked). */
     private static boolean isInteractive(@Nullable android.content.Context context) {

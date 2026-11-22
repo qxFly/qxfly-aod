@@ -57,6 +57,31 @@ public final class LyricStyle {
     public int bgColor = Color.BLACK;
     /** Pill opacity multiplier, 0..1. */
     public float bgAlpha = 0.45f;
+    /**
+     * Pill corner radius in dp. 0 = square panel, larger = rounder; values are
+     * clamped to {@code 0..BG_RADIUS_MAX_DP} both here and when drawing, and
+     * the draw pass additionally limits it to half the panel's short side so a
+     * huge radius becomes a stadium instead of a distorted shape.
+     */
+    public float bgRadiusDp = BG_RADIUS_DEFAULT_DP;
+
+    /** Default corner radius in dp (matches the pre-slider hardcoded look). */
+    public static final float BG_RADIUS_DEFAULT_DP = 24f;
+    /** Upper bound offered by the editor; keeps the panel from degenerating. */
+    public static final float BG_RADIUS_MAX_DP = 40f;
+
+    /** Clamps any radius value into the supported range. */
+    public static float clampBgRadiusDp(float dp) {
+        if (Float.isNaN(dp)) {
+            return BG_RADIUS_DEFAULT_DP;
+        }
+        return Math.max(0f, Math.min(BG_RADIUS_MAX_DP, dp));
+    }
+
+    /** This style's radius, already clamped to the supported range. */
+    public float resolvedBgRadiusDp() {
+        return clampBgRadiusDp(bgRadiusDp);
+    }
 
     /** true = show "title - artist" above the lyric. */
     public boolean showTrack;
@@ -90,6 +115,8 @@ public final class LyricStyle {
         s.bgEnabled = "1".equals(b.getString(StateKeys.STYLE_BG_ENABLED));
         s.bgColor = parseInt(b.getString(StateKeys.STYLE_BG_COLOR), s.bgColor);
         s.bgAlpha = parseFloat(b.getString(StateKeys.STYLE_BG_ALPHA), s.bgAlpha);
+        s.bgRadiusDp = clampBgRadiusDp(
+                parseFloat(b.getString(StateKeys.STYLE_BG_RADIUS), s.bgRadiusDp));
         s.showTrack = "1".equals(b.getString(StateKeys.STYLE_SHOW_TRACK));
         s.showNext = "1".equals(b.getString(StateKeys.STYLE_SHOW_NEXT));
         s.showProgress = "1".equals(b.getString(StateKeys.STYLE_SHOW_PROGRESS));
@@ -148,6 +175,7 @@ public final class LyricStyle {
         b.putString(StateKeys.STYLE_BG_ENABLED, bgEnabled ? "1" : "0");
         b.putString(StateKeys.STYLE_BG_COLOR, Integer.toHexString(bgColor));
         b.putString(StateKeys.STYLE_BG_ALPHA, String.valueOf(bgAlpha));
+        b.putString(StateKeys.STYLE_BG_RADIUS, String.valueOf(resolvedBgRadiusDp()));
         b.putString(StateKeys.STYLE_SHOW_TRACK, showTrack ? "1" : "0");
         b.putString(StateKeys.STYLE_SHOW_NEXT, showNext ? "1" : "0");
         b.putString(StateKeys.STYLE_SHOW_PROGRESS, showProgress ? "1" : "0");

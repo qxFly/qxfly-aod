@@ -177,6 +177,11 @@ public final class StateKeys {
     public static final String STYLE_BG_COLOR = "styleBgColor";
     /** Background opacity multiplier, 0..1. */
     public static final String STYLE_BG_ALPHA = "styleBgAlpha";
+    /**
+     * Background corner radius in dp, 0..{@link LyricStyle#BG_RADIUS_MAX_DP}.
+     * Absent on older payloads: the hook then uses the 24 dp default.
+     */
+    public static final String STYLE_BG_RADIUS = "styleBgRadius";
 
     // ---- extra lines around the lyric ----
     /** true = show "title - artist" above the lyric. */
@@ -201,7 +206,7 @@ public final class StateKeys {
             STYLE_ITALIC, STYLE_OFFSET_RATIO, STYLE_ALIGN,
             STYLE_ANCHOR_ID, STYLE_ANCHOR_POS, STYLE_ANCHOR_GAP, STYLE_TREE_INSERT,
             STYLE_SHOW_TRANSLATION, STYLE_FONT_STAMP,
-            STYLE_BG_ENABLED, STYLE_BG_COLOR, STYLE_BG_ALPHA,
+            STYLE_BG_ENABLED, STYLE_BG_COLOR, STYLE_BG_ALPHA, STYLE_BG_RADIUS,
             STYLE_SHOW_TRACK, STYLE_SHOW_NEXT, STYLE_SHOW_PROGRESS, STYLE_PAUSE_KEEP,
     };
 

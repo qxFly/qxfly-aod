@@ -373,6 +373,55 @@ private static void setPanelHold(boolean hold, boolean force) {
 | `touch modes enabled/restored` 日志 | **0 条**（确认不再碰触摸 IC） |
 | `work/run-tests.ps1` | 56 断言全过 |
 
+## 8.1.5：背景圆角 + 歌词延迟/双击窗口修复（2026-11-22 第二十二轮）
+
+### A. 背景圆角可调
+
+以前圆角写死在 `LyricTextView` 里的 `dp(24)`，现在可调：
+
+| 层 | 改动 |
+|---|---|
+| `StateKeys` | 新增 `styleBgRadius`，并入 `STYLE_KEYS`（参与样式戳） |
+| `LyricStyle` | `bgRadiusDp`（默认 24），`clampBgRadiusDp()` 夹到 0–40，`resolvedBgRadiusDp()` |
+| `LyricTextView` | `setLyricBackground(enabled, color, alpha, radiusDp)`；绘制时再夹到面板短边的一半（否则超大会被 Skia 拉变形） |
+| `StyleEditor` | 背景区新增「背景圆角」滑条（0–40 dp，可直接输入），预览同步；「胶囊」预设 = 24 dp；JSON 导入导出带 `bgRadiusDp` |
+
+热更新走既有样式戳：改完保存即重绘，不用重启 AOD。
+
+**真机取证**（`content call ... --method update --extra type:s:style` 注入）：
+
+| 值 | AOD 表现 |
+|---|---|
+| `styleBgRadius=0` | 方形面板（四角直角） |
+| `styleBgRadius=40` | 胶囊/体育场形（半径被短边夹到一半以内） |
+
+测试：新增 `LyricStyleTest`（默认值 + 夹取边界，12 断言），`run-tests.ps1`
+共 **68 断言**全过。
+
+### B. 歌词「慢 1s」
+
+**根因**：`ContentObserver` 收到推送时只置 `sProviderDirty`，真正的 binder 查询要等
+下一个 1s 轮询 tick —— 也就是 0–1000ms 的随机延迟。
+
+**修复**：`kickPoll()`（120ms 合并窗口）把 `pollOnce(true)` 立刻投给同一个单线程
+执行器，跳过自适应节流；1s 心跳保留（进度条/看门狗仍按原节奏）。
+
+**实测**：同进程日志 `legacy lyric:` → `now playing:` 间隔 **150–190ms**。
+
+### C. 歌词刚更新 1–2s 内双击亮屏失效
+
+**根因**：歌词更新会发 `com.android.systemui.doze.pulse`（4s 节流）强制面板重绘，
+而 pulse 周期（`DOZE_REQUEST_PULSE`/`DOZE_PULSING`/`DOZE_PULSE_DONE`）内
+`PowerManager.wakeUp()` 会被系统吞掉 —— 双击检测到了、唤醒却无效。
+
+**修复**：8.1.3 之后面板本来就保持 `DOZE` 连续合成，pulse 已属多余。
+现在 `requestPulse()` 在 `ThemeProbeV2.isPanelAwake()` 为真时直接跳过；
+暂停/空闲（不持有面板）时仍照常 pulse，用于清原生残影。
+
+**实测**（播放 + 息屏 40s）：`DOZE_REQUEST_PULSE`/`DOZE_PULSING` 迁移 **0 次**，
+`Display State=DOZE` 稳定，帧率照常；暂停后日志恢复 `panel state -> DOZE_SUSPEND`
+并补一次 pulse。
+
 ## 8.0.0：Miuix 界面（骨架合并）
 
 `miuix/` 下的 Miuix 模板骨架（Miuix 0.9.4 + Compose，Gradle 构建）已合并进主模块：

@@ -57,6 +57,9 @@ public final class LyricBridge {
     @Nullable
     private static volatile SuperLyricSource sActiveSource;
 
+    /** Live bridge instance, so the static push path can use its reporter. */
+    private static volatile LyricBridge sInstance;
+
     @Nullable
     private static volatile String sRestoredLrc;
 
@@ -70,6 +73,7 @@ public final class LyricBridge {
         mHostLoader = hostClassLoader;
         mSource = new SuperLyricSource(xp);
         mReporter = new ModuleReporter(xp);
+        sInstance = this;
         // Let the overlay publish its state for the app UI.
         Reporter.attach(mReporter);
     }
@@ -102,6 +106,11 @@ public final class LyricBridge {
      * only runs when dirty or when the heartbeat is due (5s while a lyric is
      * live, 30s otherwise). Before this, two host processes each did one
      * {@code content call} per second forever, including on a paused/blank AOD.
+     *
+     * <p>Changed again in 8.1.5: a push now runs {@link #pollOnce(boolean)}
+     * immediately on the same single-threaded executor instead of only setting
+     * a dirty flag for the next 1s tick - that flag was the measured ~1s lyric
+     * lag ("歌词更新慢半拍").
      */
     private void startProviderPolling() {
         try {
@@ -114,99 +123,145 @@ public final class LyricBridge {
                 t.setDaemon(true);
                 return t;
             });
-            final int[] tick = {0};
-            final long[] lastMediaPush = {0L};
-            sPoller.scheduleWithFixedDelay(() -> {
-                try {
-                    // Deferred module/status reports: retry here because the
-                    // Application-creation anchors are unreliable in SystemUI.
-                    ModuleReporter.flushPendingIfReady();
-                    tick[0]++;
-                    ProviderLrcSource source = sProviderLrc;
-                    if (source == null) {
-                        return;
-                    }
-                    Context ctx = currentContext();
-                    if (ctx != null) {
-                        ensureProviderObserver(ctx);
-                    }
-                    boolean dirty = sProviderDirty;
-                    sProviderDirty = false;
-                    long now = System.currentTimeMillis();
-                    long lastFeed = Math.max(source.lastFeedAt(),
-                            sActiveSource == null ? 0 : sActiveSource.lastEventAt());
-                    boolean live = lastFeed > 0 && now - lastFeed < 60_000L;
-                    int period = live ? 5 : (AodOverlayController.isAodVisible() ? 10 : 30);
-                    // A ticking progress row only looks alive if it is polled
-                    // at the same cadence it is drawn: with "show progress" on,
-                    // refresh every tick while the AOD is up.
-                    boolean progress = AodOverlayController.isAodVisible()
-                            && AodOverlayController.progressShown()
-                            && AodOverlayController.hasContent();
-                    if (!dirty && !progress && tick[0] % period != 0) {
-                        return;
-                    }
-                    MediaSessionSource media = sMediaSession;
-                    if (media != null) {
-                        Context mediaContext = ModuleReporter.capturedContext();
-                        if (mediaContext == null) {
-                            mediaContext = currentContext();
-                        }
-                        if (mediaContext != null) {
-                            media.refresh(mediaContext);
-                        }
-                        // Mirror the session's clock/state into the provider so
-                        // the app UI shows the same progress the overlay draws
-                        // (and the stale "stopped" state from the app's v4
-                        // publisher stops lying). Throttled: the overlay reads
-                        // the session directly, so the provider only needs a
-                        // coarse sample.
-                        if (media.valid() && now - lastMediaPush[0] >= 5000L) {
-                            lastMediaPush[0] = now;
-                            long mediaPosition = media.positionNow();
-                            mReporter.reportPlayback(null, null, null,
-                                    media.durationMs() > 0, media.durationMs(),
-                                    mediaPosition >= 0, mediaPosition,
-                                    media.stateName());
-                        }
-                    }
-                    source.refresh();
-
-                    // Diagnostics handshake: the UI bumped diagRequest, so push
-                    // this process's log tail back through the provider.
-                    String diag = source.diagRequest();
-                    if (diag != null && !diag.equals(sLastDiagRequest)) {
-                        sLastDiagRequest = diag;
-                        mReporter.reportDiagnostics(sHooksInstalled,
-                                "getString + parseLyric + overlay");
-                    }
-
-                    if (!source.moduleEnabled()) {
-                        // Master switch off: force the overlay idle.
-                        AodOverlayController.setLyric(null);
-                        return;
-                    }
-                    // Watchdog: killed players never deliver a stop event, so a
-                    // line frozen for >3 min with no feed anywhere is dead - hide
-                    // it. The next real feed un-stales and restores the lyrics.
-                    boolean stale = isStale(source);
-                    if (stale) {
-                        LyricBridge.requestForceEmptyLrc();
-                        AodOverlayController.setLyric(null);
-                        return;
-                    }
-                    AodOverlayController.setLyric(buildDisplay(source));
-                } catch (Throwable t) {
-                    // Never let the scheduled task die: an exception escaping
-                    // here cancels all further executions silently.
-                    AodLog.w("lyric poll iteration failed: " + t);
-                }
-            }, 500, 1000, java.util.concurrent.TimeUnit.MILLISECONDS);
+            sPoller.scheduleWithFixedDelay(() -> pollOnce(false),
+                    500, 1000, java.util.concurrent.TimeUnit.MILLISECONDS);
             AodLog.i("provider sync started (push + adaptive poll)");
         } catch (Throwable t) {
             AodLog.w("provider polling unavailable: " + t);
         }
     }
+
+    /** Heartbeat tick counter for the adaptive cadence. */
+    private static volatile int sPollTick;
+    /** Last time the coalesced playback sample was pushed to the provider. */
+    private static volatile long sLastMediaPushAt;
+
+    /**
+     * One provider-poll iteration.
+     *
+     * @param forced true when a push asked for an immediate sync: skips the
+     *               adaptive-cadence test so the new line paints within one
+     *               frame instead of waiting for the next 1s tick.
+     */
+    private static void pollOnce(boolean forced) {
+        final LyricBridge self = sInstance;
+        if (self == null) {
+            return;
+        }
+        final ModuleReporter mReporter = self.mReporter;
+        try {
+            // Deferred module/status reports: retry here because the
+            // Application-creation anchors are unreliable in SystemUI.
+            ModuleReporter.flushPendingIfReady();
+            int tick = ++sPollTick;
+            ProviderLrcSource source = sProviderLrc;
+            if (source == null) {
+                return;
+            }
+            Context ctx = currentContext();
+            if (ctx != null) {
+                ensureProviderObserver(ctx);
+            }
+            boolean dirty = sProviderDirty;
+            sProviderDirty = false;
+            long now = System.currentTimeMillis();
+            long lastFeed = Math.max(source.lastFeedAt(),
+                    sActiveSource == null ? 0 : sActiveSource.lastEventAt());
+            boolean live = lastFeed > 0 && now - lastFeed < 60_000L;
+            int period = live ? 5 : (AodOverlayController.isAodVisible() ? 10 : 30);
+            // A ticking progress row only looks alive if it is polled
+            // at the same cadence it is drawn: with "show progress" on,
+            // refresh every tick while the AOD is up.
+            boolean progress = AodOverlayController.isAodVisible()
+                    && AodOverlayController.progressShown()
+                    && AodOverlayController.hasContent();
+            if (!forced && !dirty && !progress && tick % period != 0) {
+                return;
+            }
+            MediaSessionSource media = sMediaSession;
+            if (media != null) {
+                Context mediaContext = ModuleReporter.capturedContext();
+                if (mediaContext == null) {
+                    mediaContext = currentContext();
+                }
+                if (mediaContext != null) {
+                    media.refresh(mediaContext);
+                }
+                // Mirror the session's clock/state into the provider so
+                // the app UI shows the same progress the overlay draws
+                // (and the stale "stopped" state from the app's v4
+                // publisher stops lying). Throttled: the overlay reads
+                // the session directly, so the provider only needs a
+                // coarse sample.
+                if (media.valid() && now - sLastMediaPushAt >= 5000L) {
+                    sLastMediaPushAt = now;
+                    long mediaPosition = media.positionNow();
+                    mReporter.reportPlayback(null, null, null,
+                            media.durationMs() > 0, media.durationMs(),
+                            mediaPosition >= 0, mediaPosition,
+                            media.stateName());
+                }
+            }
+            source.refresh();
+
+            // Diagnostics handshake: the UI bumped diagRequest, so push
+            // this process's log tail back through the provider.
+            String diag = source.diagRequest();
+            if (diag != null && !diag.equals(sLastDiagRequest)) {
+                sLastDiagRequest = diag;
+                mReporter.reportDiagnostics(sHooksInstalled,
+                        "getString + parseLyric + overlay");
+            }
+
+            if (!source.moduleEnabled()) {
+                // Master switch off: force the overlay idle.
+                AodOverlayController.setLyric(null);
+                return;
+            }
+            // Watchdog: killed players never deliver a stop event, so a
+            // line frozen for >3 min with no feed anywhere is dead - hide
+            // it. The next real feed un-stales and restores the lyrics.
+            boolean stale = isStale(source);
+            if (stale) {
+                LyricBridge.requestForceEmptyLrc();
+                AodOverlayController.setLyric(null);
+                return;
+            }
+            AodOverlayController.setLyric(buildDisplay(source));
+        } catch (Throwable t) {
+            // Never let a poll iteration die: an exception escaping the
+            // scheduled task would cancel all further executions silently.
+            AodLog.w("lyric poll iteration failed: " + t);
+        }
+    }
+
+    /** Coalesced immediate poll: at most one queued per 120 ms window. */
+    private static void kickPoll() {
+        if (sKickScheduled) {
+            return;
+        }
+        sKickScheduled = true;
+        android.os.Handler h = sKickHandler;
+        if (h == null) {
+            h = new android.os.Handler(android.os.Looper.getMainLooper());
+            sKickHandler = h;
+        }
+        h.postDelayed(() -> {
+            sKickScheduled = false;
+            java.util.concurrent.ScheduledExecutorService p = sPoller;
+            if (p == null) {
+                return;
+            }
+            try {
+                p.execute(() -> pollOnce(true));
+            } catch (Throwable ignored) {
+                // Executor shutting down (host process dying): nothing to do.
+            }
+        }, 120L);
+    }
+
+    private static volatile android.os.Handler sKickHandler;
+    private static volatile boolean sKickScheduled;
 
     /** UI-app snapshot changed: refresh on the next tick instead of waiting. */
     private static volatile boolean sProviderDirty = true;
@@ -234,6 +289,10 @@ public final class LyricBridge {
                         @Override
                         public void onChange(boolean selfChange) {
                             sProviderDirty = true;
+                            // Push latency was the ~1s "lyrics lag behind"
+                            // complaint: the flag alone only took effect on the
+                            // next 1s tick. Poll right away instead.
+                            kickPoll();
                         }
                     });
             AodLog.i("provider observer registered (push updates)");

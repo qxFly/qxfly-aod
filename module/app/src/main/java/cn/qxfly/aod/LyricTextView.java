@@ -31,6 +31,9 @@ public final class LyricTextView extends TextView {
     private int mBgPadX;
     private int mBgPadY;
 
+    /** Corner radius in px, already resolved from the style's dp value. */
+    private float mBgRadiusPx = dp(24);
+
     public LyricTextView(@NonNull Context context) {
         super(context);
         mStrokePaint.setStyle(Paint.Style.STROKE);
@@ -51,10 +54,14 @@ public final class LyricTextView extends TextView {
      * extra padding equal to the pill margin, so the pill stays inside the
      * view's bounds (the overlay clips at the window edge otherwise).
      *
-     * @param alpha 0..1 opacity multiplier applied to {@code color}'s alpha
+     * @param alpha    0..1 opacity multiplier applied to {@code color}'s alpha
+     * @param radiusDp corner radius in dp (0 = square panel)
      */
-    public void setLyricBackground(boolean enabled, int color, float alpha) {
+    public void setLyricBackground(boolean enabled, int color, float alpha,
+                                   float radiusDp) {
         mBgEnabled = enabled;
+        float clamped = LyricStyle.clampBgRadiusDp(radiusDp);
+        mBgRadiusPx = dp(clamped);
         if (enabled) {
             mBgPaint.setColor(color);
             int a = Math.round(android.graphics.Color.alpha(color)
@@ -130,7 +137,10 @@ public final class LyricTextView extends TextView {
                 right += mBgPadX;
                 top -= mBgPadY;
                 bottom += mBgPadY;
-                float r = dp(24);
+                // Never let the radius exceed half the short side: Skia would
+                // otherwise distort the corners on a very thin panel.
+                float r = Math.min(mBgRadiusPx,
+                        Math.min(right - left, bottom - top) / 2f);
                 canvas.drawRoundRect(left, top, right, bottom, r, r, mBgPaint);
             }
         }

@@ -135,6 +135,7 @@
     <string name="style_bg_summary">在歌词后面画一个圆角背景板，黑底息屏上提高可读性</string>
     <string name="style_bg_color">背景颜色</string>
     <string name="style_bg_alpha">背景不透明度</string>
+    <string name="style_bg_radius">背景圆角</string>
     <string name="style_save">保存并应用</string>
     <string name="style_saved">已保存，息屏 1 秒内生效</string>
     <string name="style_reset">恢复默认</string>
