@@ -140,18 +140,14 @@ public final class MamlBridge {
     }
 
     /**
-     * Enables the display-refresh touch modes MIUI itself uses on touch.
-     *
-     * <p>{@code com.miui.aod.Utils.setTouchMode(touchId, mode, value)} forwards to
-     * Xiaomi's ITouchFeature service:
-     * mode 19 = keep-screen-on (continuous refresh), mode 11 = AOD animate.
-     * Touching the under-display fingerprint sensor turns these on, which is why
-     * the panel refreshes then and freezes otherwise.
-     */
-    /**
      * Resolves {@code com.miui.aod.Utils}. It lives in MIUIAod.apk, loaded by a
      * plugin class loader, so the module's own loader cannot see it - walk the
      * known loaders, then fall back to scanning loaded classes.
+     *
+     * <p>Not used for touch modes any more: {@code Utils.setTouchMode(0, 19|11, v)}
+     * never made the AOD panel refresh (the real lever is the display state, see
+     * {@link ThemeProbeV2#setPanelAwake}) and on-device it swallowed AOD touch,
+     * which broke double-tap-to-wake.
      */
     @Nullable
     static Class<?> findUtilsClass() {

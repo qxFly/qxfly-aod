@@ -294,9 +294,9 @@ AOSP 为「不支持 doze-suspend 的屏幕」自带 `DozeSuspendScreenStatePrev
 「欠恢复」不能用简单布尔：我们改写后机器认为已经设过 4，不会再请求，清标记
 就会永久停在 `DOZE`。所以恢复前读机器状态，仅当 `DOZE_AOD_PAUSED` 时才发 4。
 
-小米触控特性 `mode 19 (keep-screen-on)` / `mode 11 (aod-animate)` 实测
-**不改变电源状态**（`setTouchMode` 还是 PRIVATE STATIC，需要
-`getDeclaredMethod` + `setAccessible`），保留作辅助，不指望它。
+小米触控特性 `mode 19 (keep-screen-on)` / `mode 11 (aod-animate)` 当时一并接通过
+（`setTouchMode` 是 PRIVATE STATIC，需要 `getDeclaredMethod` + `setAccessible`），
+但**对刷新毫无作用，还会吞掉触摸上报**——已在 8.1.4 全部移除，不要再用。
 
 ### 真机实测（Xiaomi 14 / Android 16 / HyperOS 3）
 
@@ -316,6 +316,62 @@ AodLyric: panel state -> DOZE_SUSPEND
 ```
 
 省电行为符合预期：只有播放期间保持 `DOZE`，暂停/空闲立刻交还面板自刷新。
+
+## 8.1.4：播放中触摸失效修复（2026-11-22 第二十一轮）
+
+### 现象
+
+8.1.3 之后息屏歌词能实时刷新了，但**播放中息屏触摸完全没反应**（双击亮屏无效），
+暂停歌曲后触摸又正常。
+
+### 根因：我们自己乱动触摸 IC
+
+上一轮为了让面板刷新，顺手把 MIUI 的 `Utils.setTouchMode` 接通了（还修了
+`getMethod` → `getDeclaredMethod`，因为它是 PRIVATE STATIC），每次歌词挂载就发：
+
+```
+setTouchMode(0, 19, 1)   // keep-screen-on
+setTouchMode(0, 11, 1)   // aod-animate
+```
+
+反编译 MIUIAod(`Utils.java`) 后看到 MIUI 自己在这台手机上的真实用法：
+
+| 调用点 | 实际参数 | 含义 |
+|---|---|---|
+| `DozeHost.lambda$startEnterAnim$10` | `updateTouchModeForKeepScreenOnIfNeeded(0, ...)` → `setTouchMode(0, 19, 0)` | 进 AOD 动画时**关掉** 19 |
+| `DozeTriggers.lambda$transitionTo$0` | 同上 | doze 迁移时**关掉** 19 |
+| `Utils.updateTouchMode(1, ctx, enabled)` | mode **11**，value = `getShowStyle()==0 && AOD 开启` | 只有样式 0 才置 1 |
+| `Utils.updateTouchModeForKeepScreenOnIfNeeded` | `touchId=1` 分支**仅折叠屏**才置 19=1 | 直板机永不打开 19 |
+
+也就是说：**直板机上 MIUI 从不把 mode 19 置 1**，而我们把 19 和 11 一起打开，
+触摸 IC 被切进 MIUI 从未使用的「keep-screen-on」状态，正常触摸上报被吞掉。
+
+推送版（`origin/main`）之所以触摸正常，是因为当时用 `getMethod` 拿不到这个
+private 方法，调用一直静默失败 —— 等于从没设置过。
+
+### 修复
+
+删除对 `setTouchMode` 的所有调用，只保留真正的刷新杠杆（显示状态 4→3）：
+
+```java
+private static void setPanelHold(boolean hold, boolean force) {
+    sPanelHold = hold;
+    ThemeProbeV2.setPanelAwake(hold, force);   // DOZE_SUSPEND -> DOZE
+}
+```
+
+调用点语义不变（`setLyric` 播放/暂停/空闲、`detach()`、kicker 每 15 tick 重申），
+方法名从 `setTouchModes` 改为 `setPanelHold`，常量改为 `PANEL_REASSERT_TICKS`。
+`MamlBridge.findUtilsClass()` 保留但注明不再用于 touch mode。
+
+### 实测（Xiaomi 14 / Android 16 / HyperOS 3）
+
+| 项 | 结果 |
+|---|---|
+| 播放+息屏 | `Display State=DOZE`，8s **+908 帧**，日志 `panel hold on (refresh)` |
+| 暂停+息屏 | `Display State=DOZE_SUSPEND`，`panel hold off (battery)` |
+| `touch modes enabled/restored` 日志 | **0 条**（确认不再碰触摸 IC） |
+| `work/run-tests.ps1` | 56 断言全过 |
 
 ## 8.0.0：Miuix 界面（骨架合并）
 
@@ -1440,7 +1496,8 @@ hook android.service.dreams.DreamService.setDozeScreenState(int)
 - `sSelfApply` 标记区分「我们自己的调用」与「机器的请求」，避免周期性重申
   `DOZE` 时污染「欠恢复」簿记。
 - 小米触控特性 `mode 19 (keep-screen-on)` / `mode 11 (aod-animate)`
-  实测**不改变电源状态**，仅保留作辅助。
+  实测**不改变电源状态**，且把 IC 切进 MIUI 直板机从不使用的状态会吞掉触摸上报
+  （双击亮屏失效，见 8.1.4）——**已全部移除，不要再用**。
 
 ### 真机实测（Xiaomi 14 / Android 16 / HyperOS 3）
 

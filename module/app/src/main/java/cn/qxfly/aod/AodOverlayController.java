@@ -29,7 +29,6 @@ import static cn.qxfly.aod.ComponentCollector.containsId;
 import static cn.qxfly.aod.MamlBridge.bumpSurfaceFrameRate;
 import static cn.qxfly.aod.MamlBridge.clockText;
 import static cn.qxfly.aod.MamlBridge.driveFramerate;
-import static cn.qxfly.aod.MamlBridge.findUtilsClass;
 import static cn.qxfly.aod.MamlBridge.forceTraversal;
 import static cn.qxfly.aod.MamlBridge.harvestMamlRoots;
 import static cn.qxfly.aod.MamlBridge.readField;
@@ -1313,7 +1312,7 @@ public final class AodOverlayController {
         stopRootMotion();
         stopPulse();
         stopKicker();
-        setTouchModes(false);
+        setPanelHold(false);
         sRootRef = null;
         sLastText = null;
         sShadowMode = false;
@@ -1355,7 +1354,7 @@ public final class AodOverlayController {
 
     /**
      * True while the visible line is a paused hold (dimmed). The kicker uses
-     * it to keep the refresh touch modes released while nothing advances.
+     * it to keep the refresh hold released while nothing advances.
      */
     private static volatile boolean sPaused;
 
@@ -2132,7 +2131,7 @@ public final class AodOverlayController {
             sPaused = false;
             // Nothing plays: drop the continuous-refresh hold so the panel can
             // go back to its low-power once-a-minute cadence.
-            setTouchModes(false);
+            setPanelHold(false);
             // One pulse on the active->idle transition: the panel only
             // re-renders on a pulse, and the NATIVE theme's own lyric pills
             // must re-query the (now empty) lyric to clear the ghost line -
@@ -2168,17 +2167,17 @@ public final class AodOverlayController {
         // make the panel re-capture, no need to keep the lyric "active".
         if (dim) {
             // Paused content is static - release the refresh hold (battery).
-            setTouchModes(false);
+            setPanelHold(false);
             requestPulse(swapContext());
             postOnMain(() -> tv.setAlpha(0.55f));
         } else {
             // Playing: the line/progress changes every few seconds, and a
             // DOZE_SUSPEND panel ignores new frames (it only re-composites on
-            // its minute tick). Hold the refresh touch modes so new content
-            // actually reaches the physical screen - see setTouchModes().
+            // its minute tick). Hold the panel in DOZE so new content actually
+            // reaches the physical screen - see setPanelHold().
             // While the screen is interactive it refreshes anyway, so do not
             // grab the hold there (the kicker reconciles within a second).
-            setTouchModes(!isInteractive(swapContext()));
+            setPanelHold(!isInteractive(swapContext()));
             requestPulse(swapContext());
             postOnMain(() -> tv.setAlpha(1f));
         }
@@ -2299,8 +2298,8 @@ public final class AodOverlayController {
     @Nullable
     static volatile android.animation.ObjectAnimator sRootMotion;
 
-    /** True while the AOD touch modes are held on by us. */
-    private static volatile boolean sTouchModesOn;
+    /** True while we are holding the panel in DOZE for continuous refresh. */
+    private static volatile boolean sPanelHold;
 
     @Nullable
     static volatile Class<?> sUtilsClass;
@@ -2419,52 +2418,32 @@ public final class AodOverlayController {
         return sPluginLoader;
     }
 
-    private static void setTouchModes(boolean enable) {
-        setTouchModes(enable, false);
+    private static void setPanelHold(boolean hold) {
+        setPanelHold(hold, false);
     }
 
     /**
-     * @param force re-issue the binder call even when our cached state already
-     *              matches: the system can drop the mode on its own (display
-     *              transitions, touch handling) and the cache would go stale.
+     * Holds (or releases) continuous AOD panel refresh while a lyric is live.
+     *
+     * <p>Implemented entirely by {@link ThemeProbeV2#setPanelAwake}: MIUI parks
+     * the panel in {@code DOZE_SUSPEND}, where the compositor stops sending
+     * frames, and we remap that to {@code DOZE} for the duration of playback.
+     *
+     * <p>Do NOT reintroduce MIUI's {@code Utils.setTouchMode(0, 19|11, v)} here.
+     * It never made the panel refresh (the display state is the real gate) and
+     * on-device it swallowed AOD touch events, which broke double-tap-to-wake
+     * entirely while a lyric was on screen.
+     *
+     * @param force re-assert even when our cached state already matches: the
+     *              doze machine can move the display behind our back (pulse,
+     *              system transitions).
      */
-    private static void setTouchModes(boolean enable, boolean force) {
-        // Drive the real display-state lever first (DOZE_SUSPEND -> DOZE): the
-        // touch modes below turned out to be a no-op for the panel, while this
-        // is what actually lets new frames reach the physical screen.
-        ThemeProbeV2.setPanelAwake(enable, force);
-        if (!force && sTouchModesOn == enable) {
-            return;
-        }
-        try {
-            Class<?> utils = findUtilsClass();
-            if (utils == null) {
-                if (sLoggedFailures.add("touchModes:noUtils")) {
-                    AodLyricModule.w("touch modes unavailable: com.miui.aod.Utils"
-                            + " not resolvable (plugin not loaded yet)");
-                }
-                return;
-            }
-            java.lang.reflect.Method m = utils.getDeclaredMethod("setTouchMode",
-                    int.class, int.class, int.class);
-            // MIUI declares it PRIVATE STATIC (Utils.java:671); getMethod()
-            // throws NoSuchMethodException, so reach it via getDeclaredMethod.
-            m.setAccessible(true);
-            int value = enable ? 1 : 0;
-            Object r19 = m.invoke(null, 0, 19, value);
-            Object r11 = m.invoke(null, 0, 11, value);
-            sTouchModesOn = enable;
-            // r19/r11 are the calls' own return values (true = accepted), not
-            // the mode; log the mode we asked for so the line is readable.
-            AodLyricModule.i("touch modes " + (enable ? "enabled" : "restored")
-                    + " (mode=" + value + ", keepScreenOn=" + r19
-                    + ", aodAnimate=" + r11 + (force ? ", reasserted" : "") + ")");
-        } catch (Throwable t) {
-            if (sLoggedFailures.add("touchModes:" + enable + ":"
-                    + t.getClass().getSimpleName())) {
-                AodLyricModule.w("touch mode " + (enable ? "enable" : "restore")
-                        + " failed: " + t.getClass().getSimpleName() + ": " + t.getMessage());
-            }
+    private static void setPanelHold(boolean hold, boolean force) {
+        boolean changed = sPanelHold != hold;
+        sPanelHold = hold;
+        ThemeProbeV2.setPanelAwake(hold, force);
+        if (changed) {
+            AodLyricModule.i("panel hold " + (hold ? "on (refresh)" : "off (battery)"));
         }
     }
 
@@ -2522,12 +2501,12 @@ public final class AodOverlayController {
             try {
                 int tick = sTick.incrementAndGet();
                 // Keep the refresh hold in step with reality. The system can
-                // drop the touch modes on its own (display transitions), so
-                // re-issue them every few ticks; an interactive screen is
-                // already refreshing, so release there instead of fighting
-                // the power key. setTouchModes() no-ops on an unchanged state.
+                // drop it on its own (display transitions, pulses), so re-assert
+                // it every few ticks; an interactive screen is already
+                // refreshing, so release there instead of fighting the power
+                // key. setPanelHold() no-ops on an unchanged state.
                 boolean wantHold = !sPaused && !isInteractive(swapContext());
-                setTouchModes(wantHold, tick % TOUCH_REASSERT_TICKS == 0);
+                setPanelHold(wantHold, tick % PANEL_REASSERT_TICKS == 0);
                 // Cost tiers (was: full structural refresh every single second):
                 //   - 1s cadence right after a change, and always while a
                 //     deferred pulse is waiting (fast lyrics must not lag);
@@ -2647,10 +2626,10 @@ public final class AodOverlayController {
     private static final int IDLE_TICK_DIVISOR = 3;
 
     /**
-     * Kicker cadence for forcing the touch-mode hold back on. The system can
-     * clear it behind our back, and our cached flag would then be stale.
+     * Kicker cadence for forcing the panel hold back on. The doze machine can
+     * move the display behind our back, and our cached flag would then be stale.
      */
-    private static final int TOUCH_REASSERT_TICKS = 15;
+    private static final int PANEL_REASSERT_TICKS = 15;
 
     /** "overlay alive" log cadence (seconds). */
     private static final int ALIVE_LOG_TICKS = 60;
