@@ -689,6 +689,9 @@ public final class ThemeProbeV2 {
             }
             return;
         }
+        // Re-engaging cancels any pending park, otherwise it would fire mid-
+        // hold and suspend the panel right after we resumed compositing.
+        cancelPark();
         if (changed || force) {
             requestDoze();
         }
@@ -812,10 +815,95 @@ public final class ThemeProbeV2 {
         applyDozeState(STATE_DOZE);
     }
 
-    /** Hands the panel back to self-refresh after the hold is released. */
+    /**
+     * Hands the panel back to self-refresh after the hold is released.
+     *
+     * <p>Two things make a naive "write 4 now" wrong here:
+     *
+     * <ul>
+     *   <li>The machine believes the display is ALREADY suspended - we remapped
+     *       its suspend request to DOZE for the hold - so nothing else will
+     *       park it, and the machine's current enum is no reliable signal
+     *       (DOZE_AOD while a lyric plays, DOZE_PULSE_DONE right after one of
+     *       our pulses; measured: pause → pulse → parked lit for 14 minutes on
+     *       Android 17).</li>
+     *   <li>The release transition has a repaint in flight (the dimmed paused
+     *       line, ghost clearing): writing 4 immediately would suspend the
+     *       panel before that frame ever reaches it.</li>
+     * </ul>
+     *
+     * <p>So: wait a short grace period (frames keep flowing in DOZE), then park
+     * the panel ourselves once any pulse cycle has drained. Skipped entirely
+     * when the device is no longer dozing (user woke the screen).
+     */
     private static void restoreSuspend() {
-        if (!machineWantsSuspend()) {
+        if (sParkScheduled) {
+            return;
+        }
+        sParkScheduled = true;
+        Runnable task = () -> {
+            sParkScheduled = false;
+            sParkRunnable = null;
+            parkPanelSuspend(PULSE_WAIT_BUDGET_MS);
+        };
+        sParkRunnable = task;
+        mainHandler().postDelayed(task, PANEL_RELEASE_GRACE_MS);
+    }
+
+    /** Grace period (ms) a release keeps DOZE alive for the final repaint. */
+    private static final long PANEL_RELEASE_GRACE_MS = 1200L;
+    /** Max extra time (ms) to wait for an in-flight pulse cycle to drain. */
+    private static final long PULSE_WAIT_BUDGET_MS = 6000L;
+
+    private static volatile boolean sParkScheduled;
+
+    @Nullable
+    private static volatile Runnable sParkRunnable;
+
+    /** Cancels a pending park: the hold is being re-engaged. */
+    private static void cancelPark() {
+        Runnable r = sParkRunnable;
+        if (r != null) {
+            mainHandler().removeCallbacks(r);
+        }
+        sParkRunnable = null;
+        sParkScheduled = false;
+    }
+
+    /**
+     * Writes {@code DOZE_SUSPEND} once it is safe: the device must still be
+     * dozing and no pulse cycle may be lighting the panel.
+     *
+     * @param waitBudgetMs remaining milliseconds to keep waiting for an
+     *                     in-flight pulse cycle before parking anyway
+     */
+    private static void parkPanelSuspend(long waitBudgetMs) {
+        String state = machineState();
+        if (state == null) {
+            if (!sSuspendRemapped) {
+                // No machine captured and we never remapped a suspend request:
+                // the display state is not ours to fix.
+                return;
+            }
             sSuspendRemapped = false;
+            applyDozeState(STATE_DOZE_SUSPEND);
+            return;
+        }
+        if ("FINISH".equals(state)) {
+            // Awake / dream torn down: the system owns the display again.
+            sSuspendRemapped = false;
+            return;
+        }
+        // UNINITIALIZED/INITIALIZED: the doze service just (re)started - a
+        // redundant power-key press while already dozing does that. Writing 4
+        // now would race MIUI's own STATE_ON transition, so wait it out.
+        boolean transientState = "UNINITIALIZED".equals(state)
+                || "INITIALIZED".equals(state)
+                || "DOZE_REQUEST_PULSE".equals(state)
+                || "DOZE_PULSING".equals(state);
+        if (transientState && waitBudgetMs > 0) {
+            mainHandler().postDelayed(
+                    () -> parkPanelSuspend(waitBudgetMs - 500L), 500L);
             return;
         }
         sSuspendRemapped = false;
@@ -823,24 +911,87 @@ public final class ThemeProbeV2 {
     }
 
     /**
-     * True when the doze machine's current state maps to a suspended display
-     * (AOSP: DOZE_AOD_PAUSED -&gt; STATE_DOZE_SUSPEND) or when no machine has
-     * been captured yet but we know we rewrote a suspend request.
+     * Self-heal for a park that never happened.
+     *
+     * <p>A doze service restart (redundant power key while already dozing) can
+     * make the one-shot park read a transient machine state and give up; the
+     * panel then keeps compositing at ~120 fps with nothing playing (measured:
+     * 5 minutes of wasted frames). The overlay kicker calls this while paused
+     * and while idle, so the leak closes itself.
+     *
+     * <p>Only acts on settled doze states, so MIUI's own pulses (which briefly
+     * light the panel) are never fought.
      */
-    private static boolean machineWantsSuspend() {
+    public static void confirmPanelSuspended() {
+        if (sPanelAwake) {
+            sStuckPulseAt = 0;
+            return;
+        }
+        String state = machineState();
+        if (state == null) {
+            sStuckPulseAt = 0;
+            return;
+        }
+        long now = android.os.SystemClock.elapsedRealtime();
+        boolean pulseState = "DOZE_REQUEST_PULSE".equals(state)
+                || "DOZE_PULSING".equals(state);
+        if (pulseState) {
+            // A healthy pulse drains in well under a second. One that is still
+            // here seconds later is stuck (seen after a redundant power-key
+            // press right after pause): the panel stays lit and the compositor
+            // spins at ~120 fps for minutes. Treat that as a leak and park.
+            if (sStuckPulseAt == 0) {
+                sStuckPulseAt = now;
+                return;
+            }
+            if (now - sStuckPulseAt < STUCK_PULSE_MS) {
+                return;
+            }
+            sStuckPulseAt = 0;
+        } else {
+            sStuckPulseAt = 0;
+        }
+        boolean settled = "DOZE_AOD".equals(state)
+                || "DOZE_AOD_PAUSED".equals(state)
+                || "DOZE_PULSE_DONE".equals(state);
+        if (!settled && !pulseState) {
+            return;
+        }
+        if (now - sLastConfirmAt < CONFIRM_INTERVAL_MS) {
+            return;
+        }
+        sLastConfirmAt = now;
+        applyDozeState(STATE_DOZE_SUSPEND);
+    }
+
+    /** How long a pulse may stay in flight before it counts as stuck. */
+    private static final long STUCK_PULSE_MS = 5_000L;
+
+    /** First sighting of a pulse state that has not drained yet (ms, uptime). */
+    private static volatile long sStuckPulseAt;
+
+    /** Minimum gap between self-heal park attempts. */
+    private static final long CONFIRM_INTERVAL_MS = 10_000L;
+
+    private static volatile long sLastConfirmAt;
+
+    /**
+     * The doze machine's current state name, or null when unknown.
+     */
+    @Nullable
+    private static String machineState() {
         Object machine = sDozeMachine;
         java.lang.reflect.Field field = sDozeStateField;
         if (machine != null && field != null) {
             try {
                 Object state = field.get(machine);
                 if (state instanceof Enum) {
-                    String name = ((Enum<?>) state).name();
-                    return "DOZE_AOD_PAUSED".equals(name);
+                    return ((Enum<?>) state).name();
                 }
             } catch (Throwable ignored) {
             }
         }
-        return sSuspendRemapped;
+        return null;
     }
 
     /**

@@ -2132,6 +2132,7 @@ public final class AodOverlayController {
         boolean pausedKeep = d.paused && style != null && style.pauseKeep && d.hasLine();
 
         if (!d.hasLine() && !pausedKeep) {
+            final boolean wasActive = sActive;
             if (sLastText != null && !sLastText.isEmpty()) {
                 AodLyricModule.i("overlay idle (no lyric)");
             }
@@ -2148,7 +2149,16 @@ public final class AodOverlayController {
             // must re-query the (now empty) lyric to clear the ghost line -
             // without this the last line stayed frozen on photo/full-screen
             // AOD themes after playback stopped.
-            requestPulse(swapContext());
+            //
+            // MUST stay transition-gated. setLyric runs on EVERY poll tick, and
+            // a phone whose player app pushes an update per second made this
+            // fire a pulse every 4s forever (the throttle window): each pulse
+            // lights the panel, so the AOD never settled back into
+            // DOZE_SUSPEND and the screen stayed lit (measured on Android 17 /
+            // HyperOS 4).
+            if (wasActive) {
+                requestPulse(swapContext());
+            }
             // Hide rather than blank: an invisible, non-touchable view cannot
             // cover the fingerprint sensor while nothing is playing.
             postOnMain(() -> tv.setAlpha(1f));
@@ -2168,6 +2178,7 @@ public final class AodOverlayController {
         sActive = true;
 
         boolean dim = d.paused;
+        boolean wasPaused = sPaused;
         sPaused = dim;
         if (wasIdle) {
             AodLyricModule.i("overlay text -> " + sLastText
@@ -2179,7 +2190,16 @@ public final class AodOverlayController {
         if (dim) {
             // Paused content is static - release the refresh hold (battery).
             setPanelHold(false);
-            requestPulse(swapContext());
+            // ...and stop the frame pump: the panel is about to suspend, so the
+            // endless alpha animation would only burn CPU without ever reaching
+            // the screen (measured ~130 fps while paused).
+            stopPulse();
+            stopRootMotion();
+            // Transition-gated: a per-tick pulse here lit the panel every 4s
+            // (throttle window) and the AOD never returned to DOZE_SUSPEND.
+            if (!wasPaused) {
+                requestPulse(swapContext());
+            }
             postOnMain(() -> tv.setAlpha(0.55f));
         } else {
             // Playing: the line/progress changes every few seconds, and a
@@ -2522,13 +2542,18 @@ public final class AodOverlayController {
             if (view == null || !sAodVisible) {
                 return;
             }
+            int tick = sTick.incrementAndGet();
             // Idle: nothing playing, nothing to refresh. Doing work here (and
-            // especially pulsing) broke touch handling for no benefit.
+            // especially pulsing) broke touch handling for no benefit - but a
+            // park that was skipped (doze service restart) must still close,
+            // otherwise the panel keeps compositing at ~120 fps for nothing.
             if (!sActive) {
+                if (tick % 15 == 0) {
+                    ThemeProbeV2.confirmPanelSuspended();
+                }
                 return;
             }
             try {
-                int tick = sTick.incrementAndGet();
                 // Keep the refresh hold in step with reality. The system can
                 // drop it on its own (display transitions, pulses), so re-assert
                 // it every few ticks; an interactive screen is already
@@ -2536,6 +2561,11 @@ public final class AodOverlayController {
                 // key. setPanelHold() no-ops on an unchanged state.
                 boolean wantHold = !sPaused && !isInteractive(swapContext());
                 setPanelHold(wantHold, tick % PANEL_REASSERT_TICKS == 0);
+                // Paused: keep checking that the panel really suspended. A
+                // skipped one-shot park would otherwise composite forever.
+                if (!wantHold && tick % 5 == 0) {
+                    ThemeProbeV2.confirmPanelSuspended();
+                }
                 // Cost tiers (was: full structural refresh every single second):
                 //   - 1s cadence right after a change, and always while a
                 //     deferred pulse is waiting (fast lyrics must not lag);
@@ -2586,8 +2616,20 @@ public final class AodOverlayController {
                         }
                         // A cancelled animator (frequently on detach/re-attach)
                         // would silently stop the frame flow again.
+                        //
+                        // Paused is different: the panel is parked in
+                        // DOZE_SUSPEND (self-refresh), so those frames never
+                        // reach the screen - an endless alpha animation here
+                        // just burns CPU (measured: ~130 fps / 20% SystemUI CPU
+                        // while paused, vs ~10 fps when the screen is on and
+                        // idle). Stop it and let the panel rest.
                         android.animation.ObjectAnimator pulse = sPulse;
-                        if (pulse == null || !pulse.isRunning()) {
+                        if (sPaused) {
+                            if (pulse != null && pulse.isRunning()) {
+                                stopPulse();
+                                stopRootMotion();
+                            }
+                        } else if (pulse == null || !pulse.isRunning()) {
                             startPulse(view);
                         }
                         CharSequence content = sLastSpanned;
@@ -2616,7 +2658,9 @@ public final class AodOverlayController {
                             }
                         }
                         // Keep the AOD renderer animated; see driveFramerate().
-                        if (heavy) {
+                        // Only while playing: a paused panel is suspended and
+                        // does not need (or receive) these frames.
+                        if (heavy && !sPaused) {
                             driveFramerate();
                         }
                     } catch (Throwable t) {

@@ -422,6 +422,73 @@ private static void setPanelHold(boolean hold, boolean force) {
 `Display State=DOZE` 稳定，帧率照常；暂停后日志恢复 `panel state -> DOZE_SUSPEND`
 并补一次 pulse。
 
+## 8.1.6：Android 17 / HyperOS 4 兼容 + 暂停回落与空转修复（2026-11-22 第二十三轮）
+
+### 新机兼容性（Xiaomi `2509FPN0BC`，Android 17 / SDK 37，HyperOS 4.0）
+
+关键类**全部没有漂移**（直接在 `MIUIAod.apk` / `MiuiSystemUI.apk` 的 dex 里核对）：
+
+| 目标 | 结果 |
+|---|---|
+| `com.miui.aod.doze.DozeServicePluginImpl` / `DozeMachine` / `utils.CommonUtils` / `Utils` | ✅ 存在 |
+| `com.android.keyguard.doze.MiuiDozeService` | ✅ 存在 |
+| `com.android.systemui.doze.DozeMachine` / `DozeService` / `statusbar.phone.DozeServiceHost` | ✅ 存在 |
+
+实测：`doze service captured: com.android.keyguard.doze.MiuiDozeService`、
+`panel hold: DOZE_SUSPEND -> DOZE`、播放+息屏 `Display State=DOZE`、
+8 秒 **+1960 / +1964 / +1946 帧**、歌词与翻译正常上屏。
+
+### 本轮修掉的三个问题
+
+**1. pulse 只在状态跃迁发一次**
+
+`setLyric` 的空闲/暂停分支原来**每次轮询都** `requestPulse`。旧机上轮询不频繁没暴露；
+新机上播放器每秒推一次状态，被 4 秒节流窗稳定成「每 4–5 秒一个 pulse」，屏幕反复被点亮。
+现在用 `wasActive` / `wasPaused` 做跃迁判断（实测暂停后 30 秒内只剩跃迁那 1 次）。
+
+**2. 暂停回不到 `DOZE_SUSPEND`（面板停在 ON）**
+
+暂停时那次 pulse 会把 DozeMachine 推到 `DOZE_PULSING` 并停在 `DOZE_PULSE_DONE`，
+而 `STATE_ON` 一直没人改回去（实测停 14 分钟）。原恢复逻辑还被
+`machineWantsSuspend()`（只认 `DOZE_AOD_PAUSED`）挡掉。
+
+重写 `restoreSuspend()`：
+
+```
+释放保持
+  → 宽限 1200ms（让"变暗的暂停行"在 DOZE 下先上屏）
+  → parkPanelSuspend(6000)
+       ├ 机器在 REQUEST_PULSE / PULSING → 每 500ms 重试（预算 6s）
+       ├ 机器在 UNINITIALIZED / INITIALIZED（doze 服务重启）→ 同样重试
+       ├ 机器 FINISH（已唤醒）→ 放弃，交还系统
+       └ 其余 doze 状态 → 自己写 4
+  → 恢复播放时 cancelPark()，避免宽限期内的 park 打在新一轮保持上
+```
+
+实测（新机）：暂停后 **+2s 即 `DOZE_SUSPEND`**（多数轮次），30 秒不回弹。
+
+**3. 卡住的 pulse 与漏挂起的兜底**
+
+kicker 每 5s（暂停）/15s（空闲）调用 `confirmPanelSuspended()`：
+
+- 稳定态（`DOZE_AOD` / `DOZE_AOD_PAUSED` / `DOZE_PULSE_DONE`）且未持有面板 → 补写 4
+- **pulse 状态持续 >5 秒**视为卡住（正常 pulse 一秒内排空）→ 同样补写 4
+- 10 秒节流，避免刷日志
+
+压测（6 次，含 73ms / 120ms / 200ms 补电源键、双 SLEEP、连续三次 SLEEP）均未再出现长时间卡住。
+
+**4. 暂停后停止帧泵（省电）**
+
+`sPulse`（无限 alpha 动画）与 `sRootMotion` 原本只要 overlay 活跃就一直跑；
+面板挂起后这些帧根本不上屏。现在 `sPaused` 为真时 `stopPulse()` + `stopRootMotion()`，
+kicker 也不再 `driveFramerate()`，恢复播放时照常重启。
+
+### 已知观察项
+
+暂停且面板 `DOZE_SUSPEND` 时，`dumpsys gfxinfo com.android.systemui` 仍可见 ~130fps、
+SystemUI CPU ~20%；**模块 idle 时同样如此**，因此判断为 MIUI 自身 AOD 动画，
+不是本模块的帧泵（亮屏空闲基线约 9.5fps）。此项未继续深挖。
+
 ## 8.0.0：Miuix 界面（骨架合并）
 
 `miuix/` 下的 Miuix 模板骨架（Miuix 0.9.4 + Compose，Gradle 构建）已合并进主模块：
