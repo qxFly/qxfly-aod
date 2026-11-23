@@ -7,6 +7,11 @@
 - **可以**在本地 `git add` / `git commit`。
 - **禁止主动 `git push`**（包括 `git push -u origin main`、`--force`、推送 tag 等一切远端写操作）。
 - 只有当用户明确说出「推送 GitHub / push / 上传」这类指令时才允许推送；否则提交后停在本地，并在回复里说明「已本地提交，未推送」。
+- **本地 `main` = 完整开发历史**（含 `docs/`、`work/`、`AGENTS.md`）；**远端 `main` = 仅源码发布树**
+  （`module/`、`tools/`、`build.ps1`、`BUILDING.md`、`README.md`、`.gitignore`）。
+  - **禁止把本地 `main` 直接 push 到远端**（会把 docs/work 带回去）。
+  - 更新发布源码：用独立干净源码树提交后推送，或显式指定干净提交强推。
+  - 强推前的旧远端 main 已备份为本地标签 `backup-main-0b4654c`。
 - 不要擅自改 `origin`、不要创建/删除远端分支或 Release。
 
 ## 执行方式
