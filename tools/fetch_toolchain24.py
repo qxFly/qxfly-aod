@@ -11,6 +11,7 @@ import urllib.request, os, time, zipfile, shutil
 WS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEST = os.path.join(WS, ".deps", "downloads")
 os.makedirs(DEST, exist_ok=True)
+os.makedirs(os.path.join(WS, ".deps", "libs"), exist_ok=True)
 
 K = "2.4.21"
 
