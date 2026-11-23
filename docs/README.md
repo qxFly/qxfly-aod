@@ -104,7 +104,7 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1 -Clean
 * **大文件拆分**：`AodOverlayController` 3013 → 2700 行，抽出
   `AnchorIds`（锚点 id 折叠规则，纯逻辑）、`ComponentCollector`（组件树枚举）、
   `MamlBridge`（MAML 反射 + 面板刷新杠杆）。
-* **JVM 测试**：`work/run-tests.ps1` 编译并运行 `module/test/java` 下的纯逻辑用例
+* **JVM 测试**：`tools/run-tests.ps1` 编译并运行 `module/test/java` 下的纯逻辑用例
   （锚点映射 / LRC 生成 / 渲染签名 / 歌名交叉校验 / 进度外推），共 56 条断言，
   不引入 JUnit。
 * **LRC 转义修正**：原来先转义 `<` 再转义 `&`，把 `a<b` 变成 `&amp;lt;`，
@@ -113,7 +113,7 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1 -Clean
 新增构建检查（可选，不影响 APK）：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\work\run-tests.ps1
+powershell -ExecutionPolicy Bypass -File .\tools\run-tests.ps1
 ```
 
 ## 8.1.1：下一句 / 进度实测修复（2026-11-20 第十八轮）

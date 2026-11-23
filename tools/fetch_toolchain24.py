@@ -8,7 +8,7 @@
 
 import urllib.request, os, time, zipfile, shutil
 
-WS = r"D:\Code\My Project\xipinggeci"
+WS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEST = os.path.join(WS, ".deps", "downloads")
 os.makedirs(DEST, exist_ok=True)
 

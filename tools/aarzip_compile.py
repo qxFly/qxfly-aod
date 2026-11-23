@@ -4,7 +4,8 @@
 import os, glob, subprocess, sys
 
 WS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-BT = os.path.join(WS, ".deps", "android-sdk", "bt", "android-37.0", "aapt2.exe")
+BT = os.environ.get("QXFLY_BUILD_TOOLS") or os.path.join(WS, ".deps", "android-sdk", "bt", "android-37.0")
+BT = os.path.join(BT, "aapt2.exe")
 RES = os.path.join(WS, "module", "build", "aar-res2")
 OUT = os.path.join(WS, "module", "build", "aarzip2")
 os.makedirs(OUT, exist_ok=True)

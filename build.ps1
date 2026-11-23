@@ -13,7 +13,7 @@
 #   * 产物：dist\qxfly-aod-<versionName>.apk（已 zipalign、已签名）。
 #   * 中间产物：module\build\（可随时删除，-Clean 会自动清）。
 #   * 签名密钥：module\debug.keystore（请勿删除，换了就无法覆盖安装）。
-#   * 首次在新机器上构建前，先按 docs\COMPOSE_SETUP.md 准备 .deps 工具链。
+#   * 首次在新机器上构建前，先按 BUILDING.md 准备 .deps 工具链。
 #
 # 注意：本文件含中文，必须保存为 UTF-8 with BOM，否则 Windows PowerShell 5.1
 # 会按 ANSI 解析并报语法错误。
@@ -36,8 +36,8 @@ New-Item -ItemType Directory -Force -Path $TMP | Out-Null
 $env:TEMP = $TMP
 $env:TMP  = $TMP
 
-$BT      = "$S\.deps\android-sdk\bt\android-37.0"
-$JDK     = "$S\.deps\jdk21\jdk-21.0.13+9"
+$BT      = if ($env:QXFLY_BUILD_TOOLS) { $env:QXFLY_BUILD_TOOLS } else { "$S\.deps\android-sdk\bt\android-37.0" }
+$JDK     = if ($env:QXFLY_JDK) { $env:QXFLY_JDK } else { "$S\.deps\jdk21\jdk-21.0.13+9" }
 $JAVA    = "$JDK\bin\java.exe"
 $JAVAC   = "$JDK\bin\javac.exe"
 $KC      = "$S\.deps\kotlin24\kotlinc\lib\kotlin-compiler.jar"
@@ -45,7 +45,7 @@ $PLUGIN  = "$S\.deps\libs\kotlin-compose-compiler-plugin-2.4.21.jar"
 $SERP    = "$S\.deps\libs\kotlin-serialization-compiler-plugin-2.4.21.jar"
 $STDLIB  = "$S\.deps\libs\kotlin-stdlib-2.4.21.jar"
 $FATJAR  = "$S\.deps\compose-classes-m094.jar"
-$ANDROID = "$S\.deps\android-sdk\p36\android-36\android.jar"
+$ANDROID = if ($env:QXFLY_ANDROID_JAR) { $env:QXFLY_ANDROID_JAR } else { "$S\.deps\android-sdk\p36\android-36\android.jar" }
 $B       = "$S\module\build"
 $CLS     = "$B\classes"
 $GEN     = "$B\gen"
@@ -61,7 +61,7 @@ $BASE_CP = "$ANDROID;$S\.deps\libxposed\102\classes.jar;$S\.deps\superlyricapi-4
 # ---- 预检 ---------------------------------------------------------------
 foreach ($p in @($JAVA, $JAVAC, "$BT\aapt2.exe", "$BT\zipalign.exe", "$BT\lib\d8.jar", "$BT\lib\apksigner.jar",
                 $KC, $PLUGIN, $SERP, $STDLIB, $FATJAR, $ANDROID, $MANIFEST, $KEYSTORE)) {
-    if (-not (Test-Path $p)) { throw "缺少构建依赖：$p（见 docs\COMPOSE_SETUP.md）" }
+    if (-not (Test-Path $p)) { throw "缺少构建依赖：$p（见 BUILDING.md）" }
 }
 if (-not (Get-Command python -ErrorAction SilentlyContinue)) { throw "未找到 python，请加入 PATH" }
 
@@ -94,9 +94,9 @@ if ($LASTEXITCODE -ne 0) { throw "aapt2 compile (app) 失败" }
 
 # ---- 2. AAR 资源 --------------------------------------------------------
 Write-Host "[2/9] aapt2 compile (AAR res)"
-& python "$S\work\collect_aar_res2.py"
+& python "$S\tools\collect_aar_res2.py"
 if ($LASTEXITCODE -ne 0) { throw "collect_aar_res2.py 失败" }
-& python "$S\work\aarzip_compile.py"
+& python "$S\tools\aarzip_compile.py"
 if ($LASTEXITCODE -ne 0) { throw "aarzip_compile.py 失败" }
 
 # ---- 3. link ------------------------------------------------------------
@@ -136,7 +136,7 @@ if ($symbols -lt 100) { throw "资源合并不完整：只有 $symbols 个符号
 
 # ---- 4. 补齐 R ----------------------------------------------------------
 Write-Host "[4/9] complete R classes"
-& python "$S\work\gen_extra_r.py"
+& python "$S\tools\gen_extra_r.py"
 if ($LASTEXITCODE -ne 0) { throw "gen_extra_r.py 失败" }
 
 # ---- 5. javac（业务 Java + 生成的 R）------------------------------------

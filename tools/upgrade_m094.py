@@ -21,7 +21,7 @@ from collections import defaultdict
 # worker forever. Cap everything at the socket level.
 socket.setdefaulttimeout(20)
 
-WS = r"D:\Code\My Project\xipinggeci"
+WS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CLEAN = os.path.join(WS, ".deps", "m094-clean")
 DEDUP = os.path.join(WS, ".deps", "m094-dedup")
 FAT   = os.path.join(WS, ".deps", "compose-classes-m094.jar")

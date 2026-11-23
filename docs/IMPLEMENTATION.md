@@ -42,7 +42,7 @@
 | N | 组件枚举与锚点定位 | `ComponentCollector` / `AnchorIds` / `AodOverlayController` | `ComponentCollector#collectComponents` / `#applyAnchorOffset` |
 | O | 诊断与日志回传 | `AodLog` / `ModuleReporter` / `AppReporter` / `AodStateProvider` | `StateKeys#METHOD_DIAG_REQUEST` |
 | P | 机型/系统兼容 | `ThemeProbeV2` / `AodLyricModule` | `ThemeProbeV2#matchesTarget` |
-| Q | 构建与测试 | `build.ps1` / `work/run-tests.ps1` / `module/test` | `AllTests#main` |
+| Q | 构建与测试 | `build.ps1` / `tools/run-tests.ps1` / `module/test` | `AllTests#main` |
 
 ---
 
@@ -885,15 +885,22 @@ module/app/src/main/java/cn/qxfly/aod/HiddenApi.java
   - 构建+安装：`-Install`
   - 改了 Hook（`module/app/src/main/java/**`）：`-Install -Reboot`
   - 9 步：aapt2 compile/link → 补 R → javac → kotlinc(Compose) → javac(MainActivity) → d8 → stage → zipalign → apksigner
-- 单测：`work/run-tests.ps1` → `module/test/java/cn/qxfly/aod/AllTests#main`
+- 单测：`tools/run-tests.ps1` → `module/test/java/cn/qxfly/aod/AllTests#main`
   - 纯 JVM，无 JUnit（`T` 断言助手）；当前 **68 断言**
   - 覆盖：`AnchorIdsTest` / `LrcBuilderTest` / `LyricDisplayTest` / `LyricStyleTest` / `TrackInfoTest` / `MediaSessionSourceTest`
+- 工具链：`tools/setup_deps.ps1` 一键准备 `.deps`（Kotlin 2.4.21 + Compose/Miuix 依赖 + 3 个预编译 jar）；
+  JDK / Android SDK 可用 `QXFLY_JDK` / `QXFLY_BUILD_TOOLS` / `QXFLY_ANDROID_JAR` 指向本地安装（见 `BUILDING.md`）
+- 版本号：`<主版本>.<次版本>.<YYMMDD>.<NNN>`（示例 `2.4.260315.007`），`versionCode = YYMMDDNNN`，
+  唯一来源 `AndroidManifest.xml`，规则见 `AGENTS.md`
 
 实现路径：
 ```
 build.ps1
-work/run-tests.ps1
-work/collect_aar_res2.py / aarzip_compile.py / gen_extra_r.py   # 构建依赖脚本
+BUILDING.md                                                    # 源码构建说明（可随源码发布）
+tools/setup_deps.ps1                                           # 一键准备 .deps
+tools/run-tests.ps1
+tools/collect_aar_res2.py / aarzip_compile.py / gen_extra_r.py # 构建依赖脚本
+tools/prebuilt/                                                # libxposed 102 / SuperLyric 4.0 / annotation
 module/stage_apk.py                                            # res.arsc 强制 STORED
 module/test/java/cn/qxfly/aod/                                 # AllTests + T + 各测试
 ```
@@ -906,6 +913,7 @@ module/test/java/cn/qxfly/aod/                                 # AllTests + T + 
 | 2026-11-19 | 收敛为唯一 `build.ps1`（手写 aapt2/javac/kotlinc/d8 流水线） | ✅ 目录清理回收约 2.8GB |
 | 2026-11-21 | 引入纯 JVM 断言测试（56 条） | ✅ 可门禁 |
 | 2026-11-22 | 加 `LyricStyleTest`（→68 条） | ✅ |
+| 2026-11-23 | 构建脚本从 `work/` 迁到 `tools/`（`work/` 不随源码发布）；JDK/SDK 支持 `QXFLY_*` 环境变量；新增 `BUILDING.md` + `tools/setup_deps.ps1` + 预编译 jar | ✅ 版本 `2.4.261123.001` 构建通过，68 断言 |
 
 ---
 

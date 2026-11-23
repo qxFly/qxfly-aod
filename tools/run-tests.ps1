@@ -1,7 +1,7 @@
 # run-tests.ps1 - plain-JVM unit tests for the pure-logic parts of the module.
 #
 # Usage (any directory):
-#   powershell -ExecutionPolicy Bypass -File .\work\run-tests.ps1
+#   powershell -ExecutionPolicy Bypass -File .\tools\run-tests.ps1
 #
 # There is no JUnit in this project: the toolchain is hand-rolled (aapt2 /
 # kotlinc / d8), so the tests are a single main() compiled against the same
@@ -19,19 +19,19 @@ $WS  = Split-Path -Parent $PSScriptRoot
 $FSO = New-Object -ComObject Scripting.FileSystemObject
 $S   = $FSO.GetFolder($WS).ShortPath
 
-$JDK     = "$S\.deps\jdk21\jdk-21.0.13+9"
+$JDK     = if ($env:QXFLY_JDK) { $env:QXFLY_JDK } else { "$S\.deps\jdk21\jdk-21.0.13+9" }
 $JAVA    = "$JDK\bin\java.exe"
 $JAVAC   = "$JDK\bin\javac.exe"
 $STDLIB  = "$S\.deps\libs\kotlin-stdlib-2.4.21.jar"
 $FATJAR  = "$S\.deps\compose-classes-m094.jar"
-$ANDROID = "$S\.deps\android-sdk\p36\android-36\android.jar"
+$ANDROID = if ($env:QXFLY_ANDROID_JAR) { $env:QXFLY_ANDROID_JAR } else { "$S\.deps\android-sdk\p36\android-36\android.jar" }
 $B       = "$S\module\build"
 $OUT     = "$B\test-classes"
 $APP     = "$S\module\app\src\main"
 $TEST    = "$S\module\test\java"
 
 foreach ($p in @($JAVA, $JAVAC, $STDLIB, $ANDROID)) {
-    if (-not (Test-Path $p)) { throw "missing build dependency: $p (see docs\COMPOSE_SETUP.md)" }
+    if (-not (Test-Path $p)) { throw "missing build dependency: $p (see BUILDING.md)" }
 }
 if (-not (Test-Path $TEST)) { throw "missing test sources: $TEST" }
 
