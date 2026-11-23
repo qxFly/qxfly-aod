@@ -219,6 +219,10 @@ public final class AodOverlayController {
             tv.setClickable(false);
             tv.setFocusable(false);
             tv.setFocusableInTouchMode(false);
+            // Re-align in the same layout pass that first applies the full
+            // width, so the first full-width frame is already centred.
+            tv.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob)
+                    -> alignFullWidth((TextView) v));
 
             // Attach INSIDE the clock container so the lyric is part of the AOD
             // clock component: AODUpdatePositionController translates that view
@@ -380,34 +384,100 @@ public final class AodOverlayController {
      * <p>Clipping is already relaxed along the chain ({@link #relaxClipping}),
      * so the overflow is drawn. Re-applied every kicker tick because MIUI drifts
      * the AOD container for anti-burn-in and themes rebuild their params.
+     *
+     * <p>Two parts, deliberately kept apart:
+     * <ul>
+     *   <li>the explicit pixel width is a layout param (takes the next layout
+     *       pass);</li>
+     *   <li>the horizontal offset is a translationX (render property, takes the
+     *       next draw, never feeds back into layout).</li>
+     * </ul>
+     * The offset is applied ONLY once the view really measures full width. The
+     * theme's content column is horizontally centred, so an unshifted narrow
+     * view already looks centred - shifting it early is exactly what produced
+     * "lyric starts left-aligned, centres ~1s later". A layout-change listener
+     * re-aligns in the same pass that finally applies the full width.
+     *
+     * <p>A negative leftMargin was tried too and is WRONG here: the column is
+     * wrap_content and centred, so a negative margin shrinks the column itself,
+     * which moves it back by roughly half the offset. The error then decays by
+     * ~0.55x per kicker tick (measured: a 6-second rightward staircase, with
+     * the first frame 70-85px left of centre).
      */
     private static void applyFullWidth(@NonNull TextView tv) {
         try {
-            int full = tv.getResources().getDisplayMetrics().widthPixels;
-            ViewGroup root = sRootRef == null ? null : sRootRef.get();
-            if (root != null && root.getWidth() > full) {
-                full = root.getWidth();
-            }
+            int full = fullWidthPx(tv);
             if (full <= 0) {
                 return;
             }
-            ViewGroup.LayoutParams lp = tv.getLayoutParams();
-            if (lp != null && lp.width != full) {
-                lp.width = full;
-                tv.setLayoutParams(lp);
-            }
             android.view.ViewParent parent = tv.getParent();
-            if (parent instanceof ViewGroup) {
-                ViewGroup g = (ViewGroup) parent;
-                int[] loc = new int[2];
-                g.getLocationOnScreen(loc);
-                float dx = -(loc[0] + g.getPaddingLeft());
-                if (Math.abs(tv.getTranslationX() - dx) > 0.5f) {
-                    tv.setTranslationX(dx);
+            if (!(parent instanceof ViewGroup)) {
+                return;
+            }
+            ViewGroup g = (ViewGroup) parent;
+            ViewGroup.LayoutParams lp = tv.getLayoutParams();
+            if (lp == null) {
+                return;
+            }
+            boolean changed = lp.width != full;
+            lp.width = full;
+            if (lp instanceof ViewGroup.MarginLayoutParams) {
+                ViewGroup.MarginLayoutParams mlp = (ViewGroup.MarginLayoutParams) lp;
+                // Margins must stay neutral: see the note above.
+                if (mlp.leftMargin != 0 || mlp.rightMargin != 0) {
+                    mlp.leftMargin = 0;
+                    mlp.rightMargin = 0;
+                    changed = true;
                 }
             }
+            if (changed) {
+                tv.setLayoutParams(lp);
+                g.requestLayout();
+                forceTraversal(g);
+            }
+            alignFullWidth(tv);
         } catch (Throwable t) {
             AodLyricModule.w("full-width apply failed: " + t);
+        }
+    }
+
+    /** Screen width the lyric should span (the AOD root may be wider). */
+    private static int fullWidthPx(@NonNull TextView tv) {
+        int full = tv.getResources().getDisplayMetrics().widthPixels;
+        ViewGroup root = sRootRef == null ? null : sRootRef.get();
+        if (root != null && root.getWidth() > full) {
+            full = root.getWidth();
+        }
+        return full;
+    }
+
+    /**
+     * Cancels the lyric's laid-out left edge with a translation, but only once
+     * it measures full width. A translation is a render property, so it cannot
+     * change the parent's size or position (unlike a margin or a width).
+     */
+    private static void alignFullWidth(@NonNull TextView tv) {
+        try {
+            int full = fullWidthPx(tv);
+            if (full <= 0 || tv.getWidth() < full) {
+                // Still the theme's narrow view: the column is centred, so it
+                // already looks centred. Shifting now would be the old jump.
+                if (tv.getTranslationX() != 0f) {
+                    tv.setTranslationX(0f);
+                }
+                return;
+            }
+            int[] loc = new int[2];
+            tv.getLocationOnScreen(loc);
+            // getLocationOnScreen() already includes our translation: subtract
+            // it to recover the laid-out left edge, then cancel that edge.
+            float laidOutX = loc[0] - tv.getTranslationX();
+            float dx = -laidOutX;
+            if (Math.abs(tv.getTranslationX() - dx) > 0.5f) {
+                tv.setTranslationX(dx);
+            }
+        } catch (Throwable t) {
+            AodLyricModule.w("full-width align failed: " + t);
         }
     }
 

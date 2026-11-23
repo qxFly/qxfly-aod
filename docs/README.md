@@ -521,6 +521,40 @@ TextView 不设 `maxLines` / `ellipsize` / `singleLine`。
 
 实现索引见 `docs/IMPLEMENTATION.md` 的 F（宽度）/ G（高度）两节。
 
+## 8.1.8：息屏首帧歌词居中修复（2026-11-23 第二十五轮）
+
+### 现象
+
+8.1.7 整屏宽上线后，**每次息屏歌词先偏左、约 1s 后才居中**。
+
+### 根因与两次迭代
+
+1. **8.1.7 的 `translationX` 与宽度不同批生效**：位移下一帧就画，宽度要等下一次布局；
+   DOZE 下那次布局拖到 1s 后的 kicker → 旧 521px 宽的视图被左移 339px，文字中心落在 ~260px。
+2. **第一轮修复（负 `leftMargin`）失败**：主题内容列是 `wrap_content` 且水平居中，
+   负 margin 把列自身拖窄、列位置随之后移——位移每 tick 只能修正约一半误差
+   （首帧偏左 70–85px，之后 −82.5→−45.5→−27.5→−18.5→−14.5→−11.5，约 6s 阶梯右移）。
+3. **最终修复**：宽度与偏移解耦——宽度仍显式 1200；偏移回到 `translationX`
+   （渲染属性，不参与布局、无反馈），但**只在视图达到整屏宽后才施加**；
+   窄帧不位移（列本身居中，视觉不偏）；`OnLayoutChangeListener` 在宽度生效的**同一次布局**里对齐
+   （`laidOutX = getLocationOnScreen()[0] - getTranslationX()`，`translationX = -laidOutX`）。
+
+### 真机实测（2509FPN0BC / Android 17 / HyperOS 4 / 1200x2608，3 轮独立息屏）
+
+| 项 | 数据 |
+|---|---|
+| 首帧有字 | ≈+1.3s（0.7s 内 AOD 尚未淡入，无字属正常） |
+| 首帧文字中心 | **599.5–606.5px**（屏心 600，偏差 ≤7px），后续逐帧**完全一致** |
+| 面板边界 | x=30..1169（中心 599.5），全程稳定 |
+| 视图几何 | `overlay geometry: xy=0,1224 size=1200x739` |
+| 失败计数 | `full-width apply failed` / `full-width align failed` **0 次** |
+| 回归 | 播放 `DOZE`；暂停 +15s `DOZE_SUSPEND`；恢复播放 `DOZE` |
+
+> 备注：本轮验证时 SuperLyric 管线在重启后未连接（App 侧 `lyricLine` 为空，
+> 属环境问题与本轮改动无关），布局验证使用 Provider 注入的测试歌词（34sp/仅主行/居中）。
+
+实现索引见 `docs/IMPLEMENTATION.md` 的 F 节（含两次失败迭代的完整演进记录）。
+
 ## 8.0.0：Miuix 界面（骨架合并）
 
 `miuix/` 下的 Miuix 模板骨架（Miuix 0.9.4 + Compose，Gradle 构建）已合并进主模块：

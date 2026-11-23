@@ -9,8 +9,13 @@
 3. 状态标记：`✅ 现行` / `⛔ 已废弃` / `🧪 待复核`。
 4. 「当前实现」一节只描述**现在生效的那一套**，并给出 `文件路径` + `类#方法`。
    - **不写行号**（行号会漂移）；用类名 + 方法名定位。
-5. 新增功能时：先在「功能索引」加一行，再补一节；不要只改代码不留文档。
-6. 相关文档分工：
+   - **附「关键源码」**：贴出该功能最核心的那几行（判定/改写/反射调用），让人不读源码也能懂机制。
+     源码片段要标明所属 `类#方法`；改动实现时同步更新片段。
+5. **解包/反编译得到的结论一律进「附录 B：解包取证档案」**（类在哪个 dex、方法签名与访问标志、
+   常量语义、门控条件、机型差异）。目的：**避免重复解包、反复读源码**。
+   新解包出的事实追加进去，不要只留在对话里。
+6. 新增功能时：先在「功能索引」加一行，再补一节；不要只改代码不留文档。
+7. 相关文档分工：
    - `docs/README.md`：面向使用者的说明 + 按轮次的更新日志（现象、取证、结论）
    - **本文件**：面向开发者的实现索引（怎么做的、代码在哪、为什么换过做法）
    - `docs/BISECT.md`：历史故障排查复盘
@@ -58,6 +63,26 @@
 - 本地为空 → 用 Provider 的 `displayLine()` 等
 - 进度/时长/播放态始终取 Provider + `MediaSessionSource`
 
+**关键源码**（`LyricBridge#buildDisplay`，本地优先 + 逐字段兜底）：
+```java
+SuperLyricSource local = sActiveSource;
+String localLine = local == null ? null : local.currentLine();
+if (localLine != null && !localLine.isEmpty()) {
+    d.line = localLine;
+    d.translation = local.currentTranslation();
+    d.title = local.title();
+    d.artist = local.artist();
+    d.next = local.nextLine();
+}
+if (d.line == null) {                       // 本地没有行才用 Provider
+    d.line = source.displayLine();
+    d.translation = source.displayTranslation();
+    ...
+}
+if (d.next == null)  { d.next  = source.displayNext(); }   // 逐字段兜底
+if (d.title == null) { d.title = source.title(); }
+```
+
 实现路径：
 ```
 module/app/src/main/java/cn/qxfly/aod/LyricBridge.java        # buildDisplay / pollOnce
@@ -93,6 +118,25 @@ module/app/src/main/java/cn/qxfly/aod/LrcBuilder.java         # Lyric -> LRC 文
   - `kickPoll()`：120ms 合并窗口 → 把 `pollOnce(true)` 投给同一个单线程执行器（跳过自适应节流）
 - 1s 心跳仍在：进度条刷新、看门狗、媒体会话采样
 
+**关键源码**（`LyricBridge#kickPoll` + `#pollOnce` 的节流判定）：
+```java
+// onChange 里：置脏 + 立刻催一次（120ms 合并，防止每秒多次写入刷屏）
+sProviderDirty = true;
+kickPoll();
+
+private static void kickPoll() {
+    if (sKickScheduled) return;
+    sKickScheduled = true;
+    mainHandler.postDelayed(() -> {
+        sKickScheduled = false;
+        sPoller.execute(() -> pollOnce(true));   // 同一个单线程执行器，天然串行
+    }, 120L);
+}
+
+// pollOnce：forced=true 时跳过自适应节流
+if (!forced && !dirty && !progress && tick % period != 0) return;
+```
+
 实现路径：
 ```
 module/app/src/main/java/cn/qxfly/aod/AodStateProvider.java   # call / apply / notifyChanged / openFile(字体)
@@ -120,6 +164,21 @@ module/app/src/main/java/cn/qxfly/aod/LyricBridge.java        # pollOnce / kickP
 - 此时若会话 `TITLE` 只是屏幕上的歌词行（椒盐把歌词行写进 TITLE）→ **不作曲名**，标题行降级为只显示歌手
 - 无矛盾 → 载荷优先，会话只补空
 
+**关键源码**（`TrackInfo#resolve`，两条判定）：
+```java
+// 1) 会话 TITLE 等于屏幕上的歌词行 -> 它不是曲名
+if (sTitle != null && lines != null) {
+    for (String line : lines) {
+        if (line != null && sTitle.equals(line)) { sTitle = null; break; }
+    }
+}
+// 2) 会话 ARTIST 里找不到载荷 artist -> 载荷属于旧歌，改用会话值
+if (sArtist != null && pArtist != null && !sArtist.contains(pArtist)) {
+    return new TrackInfo(sTitle, sArtist);   // sTitle 可能为 null -> 只显示歌手
+}
+if (pTitle != null) return new TrackInfo(pTitle, pArtist);   // 无矛盾：载荷优先
+```
+
 实现路径：
 ```
 module/app/src/main/java/cn/qxfly/aod/TrackInfo.java
@@ -144,6 +203,20 @@ module/test/java/cn/qxfly/aod/TrackInfoTest.java   # 9 组场景
 **上限 `POSITION_MAX_EXTRAPOLATION_MS = 30_000`**：超过 30s 的外推一律截断。
 
 会话选择：`#refreshControllers` + `#score(PlaybackState, MediaMetadata)` 打分挑最可信的会话。
+
+**关键源码**（`MediaSessionSource#extrapolate`，纯函数、可单测）：
+```java
+static long extrapolate(long base, long updatedAt, float speed,
+                        boolean playing, long now) {
+    long position = Math.max(0L, base);
+    if (!playing || updatedAt <= 0L || speed <= 0f) return position;
+    long elapsed = now - updatedAt;
+    if (elapsed < 0L) elapsed = 0L;
+    else if (elapsed > POSITION_MAX_EXTRAPOLATION_MS)   // 30_000
+        elapsed = POSITION_MAX_EXTRAPOLATION_MS;        // 时间戳冻结 -> 停止外推
+    return position + (long) (elapsed * speed);
+}
+```
 
 实现路径：
 ```
@@ -179,6 +252,25 @@ module/test/java/cn/qxfly/aod/MediaSessionSourceTest.java   # 外推边界
 - `#startKicker`：1s 自适应心跳（内容刚变时每秒重绘，稳定后每 3 tick 走重路径）
 - `#startPulse` / `#stopPulse`：无限 alpha 动画逼出逐帧合成（仅播放时）
 
+**关键源码**（`AodOverlayController#attach` 常规放置 + `#applyShadowPlacement` 全屏放置）：
+```java
+// 常规 AOD：挂进时钟容器，跟随防烧屏漂移（MIUI 平移的是这个容器）
+ViewGroup host = resolveClockContainer(root);
+sClockContainer = new WeakReference<>(host);
+host.addView(tv, new ViewGroup.LayoutParams(MATCH_PARENT, WRAP_CONTENT));
+applyFullWidth(tv);
+// 主题在 onDreamingStarted 之后才 inflate，此刻容器往往还不存在 -> 重挂
+scheduleReparent(root, 600);  scheduleReparent(root, 1500);
+scheduleReparent(root, 3000); scheduleReparent(root, 6000);
+scheduleReparent(root, 10000);
+
+// shadow 模式（祖先链 alpha<0.05，插件内容被整体淡出）：改挂 AOD 根
+// 追加在最后 -> 画在淡出子树之上；keyguard 的时钟/通知是根的兄弟，不会被盖住
+root.addView(tv, lp);
+applyFullWidth(tv);
+relaxClipping(root, tv);
+```
+
 实现路径：
 ```
 module/app/src/main/java/cn/qxfly/aod/AodOverlayController.java
@@ -199,33 +291,70 @@ module/app/src/main/java/cn/qxfly/aod/MamlBridge.java        # forceTraversal / 
 
 ## F. 歌词宽度约束
 
-### 当前实现 ✅（2026-11-23，真机已验证）
+### 当前实现 ✅（2026-11-23 第三版：translationX + 整屏宽门槛，真机已验证）
 
 `AodOverlayController#applyFullWidth(TextView)`：
 
 1. `lp.width = 屏幕宽像素`（`displayMetrics.widthPixels`，若 AOD 根更宽则取根宽）
    - 正数 width 按 `EXACTLY` 测量 → **父容器再窄也夹不住**
-2. `translationX = -(父容器 getLocationOnScreen()[0] + 父容器 paddingLeft)`
-   - 让歌词左边缘对齐**屏幕**左边缘，而不是主题内容列左边缘
-3. 三条放置路径都调用（`attach` / `insertIntoFlow` / `applyShadowPlacement`），
-   并在 kicker 每 tick 重申（MIUI 防烧屏漂移 + 主题重建 LayoutParams）
+2. **`leftMargin` / `rightMargin` 一律归零**
+   - 绝不能用负 margin 做水平偏移（原因见演进记录第二版）
+3. 偏移用 `translationX`，**只有 `tv.getWidth() >= full` 时才施加**
+   - 位移是渲染属性，不参与布局 → 不会改变父容器的尺寸/位置，没有反馈环
+   - 宽度还没生效的窄帧**不位移**：主题列本身水平居中，窄帧看起来仍然是居中的 → 不会「先居左」
+4. `tv.addOnLayoutChangeListener` 在**宽度生效的同一次布局**里调用 `#alignFullWidth`
+   - `laidOutX = getLocationOnScreen()[0] - getTranslationX()`（屏坐标已含位移，先减掉）
+   - `translationX = -laidOutX` → 视图左边缘对齐屏幕左边缘
+5. 三条放置路径都调用（`attach` / `insertIntoFlow` / `applyShadowPlacement`），kicker 每 tick 重申
+   （MIUI 防烧屏漂移 + 主题重建 LayoutParams）
+
+**关键源码**（`AodOverlayController#applyFullWidth` + `#alignFullWidth`，宽度与偏移解耦）：
+```java
+boolean changed = lp.width != full;
+lp.width = full;
+if (lp instanceof ViewGroup.MarginLayoutParams) {
+    mlp.leftMargin = 0;                       // 负 margin 会拖窄 wrap_content 父容器
+    mlp.rightMargin = 0;
+}
+if (changed) { tv.setLayoutParams(lp); g.requestLayout(); forceTraversal(g); }
+alignFullWidth(tv);
+
+private static void alignFullWidth(TextView tv) {
+    int full = fullWidthPx(tv);
+    if (full <= 0 || tv.getWidth() < full) {
+        if (tv.getTranslationX() != 0f) tv.setTranslationX(0f);   // 窄帧不位移
+        return;
+    }
+    int[] loc = new int[2];
+    tv.getLocationOnScreen(loc);
+    float laidOutX = loc[0] - tv.getTranslationX();   // 屏坐标已含位移，先还原
+    float dx = -laidOutX;
+    if (Math.abs(tv.getTranslationX() - dx) > 0.5f) tv.setTranslationX(dx);
+}
+```
 
 配合 `#relaxClipping` 让溢出可见；对齐方式仍生效（居中=屏幕居中）。
 
-**实测证据**（Xiaomi `2509FPN0BC` / Android 17 / HyperOS 4，主屏 1200x2608）：
+**实测证据**（Xiaomi `2509FPN0BC` / Android 17 / HyperOS 4，主屏 1200x2608，注入测试歌词 34sp/仅主行/居中）：
 
 ```
-overlay geometry: xy=0,1233 size=1200x351   (34sp)
-overlay geometry: xy=0,1207 size=1200x815   (44sp 四行)
-主题内容列快照:  clockGradientLinearLayout|[339,685 521x193]   ← 只有 521px @ x=339
+overlay geometry: xy=0,1224 size=1200x739    （第三版）
+panel state -> DOZE                          （播放中保持）
 ```
 
-- 视图 `x=0`、`width=1200` = 整屏；单行文字实测宽 **1009–1039px**（旧 521px 列约只能装 5 个字）
-- `full-width apply failed` **0 次**；切歌 / 改字号 / 防烧屏漂移（`clock_container` ty −211→−237）全程 `size=1200` 不变
+3 轮独立息屏（PIL 逐像素，屏宽 1200）：
+
+| 帧 | 文字各行中心（px） | 面板 x 范围 |
+|---|---|---|
+| 首帧有字（≈+1.3s） | 606.5 / 599.5 / 605.5 / 601.0 | 30..1169（中心 599.5） |
+| +2s / +3s / +5s | **逐帧完全一致** | 同上 |
+
+- 首帧即居中（偏差 ≤7px），**无阶梯右移**；蓝色面板全程稳定
+- `full-width apply failed` 0 次；行宽 996–1001px（旧 521px 列约只能装 5 个字）
 
 实现路径：
 ```
-module/app/src/main/java/cn/qxfly/aod/AodOverlayController.java   # applyFullWidth
+module/app/src/main/java/cn/qxfly/aod/AodOverlayController.java   # applyFullWidth / alignFullWidth
 ```
 
 ### 演进记录
@@ -233,7 +362,9 @@ module/app/src/main/java/cn/qxfly/aod/AodOverlayController.java   # applyFullWid
 | 日期 | 做法 | 结果 |
 |---|---|---|
 | 3.0.0 起 | `lp.width = MATCH_PARENT` | ⛔ 被主题内容列宽限制（实测 **521px / 屏宽 1200px**），长句提前换行 |
-| 2026-11-23 | 显式屏宽 + `translationX` 补偿（本条） | ✅ 真机 `xy=0 / size=1200xH`，单行文字 1009–1039px；三条放置路径均接入，kicker 每秒重申 |
+| 2026-11-23（第一版） | 显式屏宽 + `translationX` 补偿 | ✅ 真机 `xy=0 / size=1200xH`，单行文字 1009–1039px；⛔ 但**每次息屏先居左、约 1s 后才居中**（见下条） |
+| 2026-11-23（第二版） | `translationX` → **负 `leftMargin`**；布局前 32ms 重试；改动后 `requestLayout + forceTraversal` | ⛔ 真机 3 轮复验失败：首帧文字中心 **517–530px**（偏左 70–85px），之后每个 kicker tick 只收敛约 **0.55 倍**（−82.5→−45.5→−27.5→−18.5→−14.5→−11.5），约 **6s 阶梯右移**。原因：主题列 `wrap_content` 且居中，负 margin 把列自身拖窄、父容器位置随之后移；日志 `xy=0` 只在进入 DOZE 时采样，拍不到收敛过程 |
+| 2026-11-23（第三版） | `translationX` + **`tv.getWidth() >= full` 门槛** + `OnLayoutChangeListener` 同帧对齐；margin 归零 | ✅ 真机 3 轮息屏：**首帧有字（≈+1.3s）即居中**（各行中心 599.5–606.5，屏心 600），后续逐帧完全一致，无阶梯；`xy=0 size=1200x739`；暂停 +15s `DOZE_SUSPEND`、恢复 `DOZE` 回归通过 |
 
 ---
 
@@ -252,6 +383,29 @@ module/app/src/main/java/cn/qxfly/aod/AodOverlayController.java   # applyFullWid
 
 另：TextView **不设** `maxLines` / `ellipsize` / `singleLine`，可无限换行。
 离开流时 `#restoreExpandedHeights` 还原主题原始高度。
+
+**关键源码**（`LyricTextView#onMeasure` 自然高度 + `AodOverlayController#expandFlowSpace` 祖先扩高）：
+```java
+// onMeasure：先用父给的 spec 量，再用 UNSPECIFIED 量自然高度，取大者上报
+super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+int clampedHeight = getMeasuredHeight();
+super.onMeasure(widthMeasureSpec,
+        MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED));
+int naturalHeight = getMeasuredHeight();
+if (naturalHeight > clampedHeight) {
+    setMeasuredDimension(getMeasuredWidth(), naturalHeight);
+}
+```
+```java
+// expandFlowSpace：歌词 -> 根，固定高容器 +delta，MATCH_PARENT 钉成 measuredHeight+delta
+while (p instanceof ViewGroup) {
+    ViewGroup g = (ViewGroup) p;
+    if (!(g.getParent() instanceof ViewGroup)) break;      // 绝不改 window root
+    if (lp.height == MATCH_PARENT) { lp.height = child.getHeight() + delta; }
+    else if (lp.height > 0)        { lp.height += delta; }
+    sExpandedHeights.put(child, original);                 // 离开流时还原
+}
+```
 
 ### 演进记录
 
@@ -278,6 +432,20 @@ module/app/src/main/java/cn/qxfly/aod/AodOverlayController.java   # applyFullWid
 - 开关：`ThemeProbeV2#setPanelAwake(boolean, boolean force)`
   - 由 `AodOverlayController#setPanelHold` 驱动（播放/暂停/空闲/detach/kicker 每 15 tick 重申）
 - `sSelfApply` 标记：区分「我们自己的调用」与「机器的请求」，避免污染簿记
+
+**关键源码**（`ThemeProbeV2#hookDreamDozeState`，唯一改写点）：
+```java
+// DreamService#setDozeScreenState(int)：所有 doze 显示状态变更的唯一漏斗
+// （MiuiDozeService 继承 DreamService 且未覆写，因此没有 SystemUI 侧可 hook）
+if (sSelfApply) return chain.proceed();          // 自己写的：不改写、不记账
+if (state == STATE_DOZE_SUSPEND) {
+    if (sPanelAwake) {
+        sSuspendRemapped = true;
+        return chain.proceed(new Object[]{STATE_DOZE});   // 4 -> 3，合成器继续送帧
+    }
+    sSuspendRemapped = false;
+}
+```
 
 实现路径：
 ```
@@ -318,6 +486,32 @@ module/app/src/main/java/cn/qxfly/aod/AodOverlayController.java  # setPanelHold 
 - pulse 周期内 wakeUp 会被吞 → `#armWakeRetry` 兜底重试（pulse 排空后补发）
 - **不碰** `Utils.setTouchMode`（见演进记录）
 - 诊断：保持 DOZE 期间收到 ACTION_DOWN 会打 `AOD touch down while holding DOZE`（1s 节流）
+
+**关键源码**（`AodOverlayController#installTouchWatch` 沿父类找声明 + `#watchDoubleTap` 判定）：
+```java
+// AodView 自己不声明 dispatchTouchEvent，继承自 ViewGroup：
+// 必须沿父类链找声明它的类，否则 getDeclaredMethod 拿不到
+for (Class<?> c = aodViewClass; c != null; c = c.getSuperclass()) {
+    for (Method m : c.getDeclaredMethods()) {
+        if ("dispatchTouchEvent".equals(m.getName())
+                && m.getParameterTypes().length == 1
+                && MotionEvent.class.equals(m.getParameterTypes()[0])) { dispatch = m; break; }
+    }
+    if (dispatch != null) break;
+}
+buildHook(sXp, dispatch, "aodlyric-touch-watch").intercept(chain -> {
+    if (aodViewClass.isInstance(chain.getThisObject())) {
+        markTouched();
+        watchDoubleTap((MotionEvent) chain.getArgs().get(0), (View) self);
+    }
+    return chain.proceed();
+});
+
+// watchDoubleTap：单次按下->抬起 <300ms 且位移<80px；两次间隔<300ms 且位移<160px -> 命中
+boolean quick = sTapDownAt != 0 && now - sTapDownAt < 300L;
+boolean still = Math.abs(x - sTapDownX) + Math.abs(y - sTapDownY) < 80f;
+boolean near  = now - sLastTapAt < 300L && Math.abs(x - sLastTapX) + Math.abs(y - sLastTapY) < 160f;
+```
 
 实现路径：
 ```
@@ -362,6 +556,24 @@ setPanelHold(false) → ThemeProbeV2#restoreSuspend
 
 pulse 收敛：`#setLyric` 的空闲/暂停分支用 `wasActive` / `wasPaused` **只在跃迁时**发一次 pulse。
 
+**关键源码**（`ThemeProbeV2#setPanelAwake` 撤销 park + `#parkPanelSuspend` 等待排空）：
+```java
+// 释放：宽限 1200ms 后 park；重新持有：立刻撤销未执行的 park
+if (!awake) { if (changed) restoreSuspend(); return; }
+cancelPark();
+if (changed || force) requestDoze();
+
+// parkPanelSuspend：瞬时态每 500ms 重试；FINISH（已唤醒）交还系统；其余 doze 态写 4
+boolean transientState = "UNINITIALIZED".equals(state) || "INITIALIZED".equals(state)
+        || "DOZE_REQUEST_PULSE".equals(state) || "DOZE_PULSING".equals(state);
+if (transientState && waitBudgetMs > 0) {
+    mainHandler().postDelayed(() -> parkPanelSuspend(waitBudgetMs - 500L), 500L);
+    return;
+}
+sSuspendRemapped = false;
+applyDozeState(STATE_DOZE_SUSPEND);
+```
+
 实现路径：
 ```
 module/app/src/main/java/cn/qxfly/aod/ThemeProbeV2.java          # restoreSuspend / parkPanelSuspend / confirmPanelSuspended / cancelPark
@@ -390,6 +602,17 @@ module/app/src/main/java/cn/qxfly/aod/AodOverlayController.java  # setLyric / se
 - 热更新：`ProviderLrcSource#styleStamp(Bundle)` 把 `STYLE_KEYS` 拼成戳；戳变 → `AodOverlayController#setStyle`
 - UI：`StyleEditor.kt` 的 `StyleDraft` ⇄ `LyricStyle`（`toDraft` / `toLyricStyle`），滑条可点数值直接输入
 - 预设/导入导出：`StyleEditor.kt` 的 `Preset` / `toJson` / `draftFromJson`（`format=aodlyric-style`, `version=1`）
+
+**关键源码**（`ProviderLrcSource#styleStamp`，全键拼戳）：
+```java
+static String styleStamp(@NonNull Bundle style) {
+    StringBuilder sb = new StringBuilder();
+    for (String key : StateKeys.STYLE_KEYS) {
+        sb.append(style.getString(key)).append('|');
+    }
+    return sb.toString();     // 戳变 -> AodOverlayController#setStyle
+}
+```
 
 实现路径：
 ```
@@ -420,6 +643,28 @@ module/app/src/main/res/values/strings.xml
 - `onDraw` 里取**所有换行行界的并集**外扩 padding，画**一个**圆角矩形（原文+译文共用一块面板）
 - 半径：`LyricStyle#clampBgRadiusDp`（0–40dp）→ 绘制时再夹到**面板短边的一半**（避免 Skia 变形）
 
+**关键源码**（`LyricTextView#setLyricBackground` + `#onDraw` 行界并集）：
+```java
+public void setLyricBackground(boolean enabled, int color, float alpha, float radiusDp) {
+    float clamped = LyricStyle.clampBgRadiusDp(radiusDp);   // 0..40dp
+    mBgRadiusPx = dp(clamped);
+    mBgPaint.setColor(color);
+    mBgPaint.setAlpha(Math.round(Color.alpha(color) * clamp01(alpha)));
+    mBgPadX = dp(20); mBgPadY = dp(12);                     // 面板留在视图边界内
+    setPadding(mBgPadX, mBgPadY, mBgPadX, mBgPadY);
+}
+// onDraw：所有行界的并集，外扩 padding -> 一块圆角矩形（原文+译文共用）
+float left = MAX, right = -MAX, top = MAX, bottom = -MAX;
+for (int i = 0; i < layout.getLineCount(); i++) {
+    left   = min(left,   padL + layout.getLineLeft(i));
+    right  = max(right,  padL + layout.getLineRight(i));
+    top    = min(top,    padT + layout.getLineTop(i));
+    bottom = max(bottom, padT + layout.getLineBottom(i));
+}
+canvas.drawRoundRect(left - mBgPadX, top - mBgPadY,
+                     right + mBgPadX, bottom + mBgPadY, r, r, mBgPaint);
+```
+
 实现路径：
 ```
 module/app/src/main/java/cn/qxfly/aod/LyricTextView.java   # setLyricBackground / onDraw
@@ -449,6 +694,18 @@ module/test/java/cn/qxfly/aod/LyricStyleTest.java
 - `CustomFontLoader#load(Context)` 加载并缓存，`#invalidate()` 失效
 - 字体戳并入样式戳 → 覆盖导入后无需重启即生效
 
+**关键源码**（`CustomFontLoader#load`，Provider 桥接 + 必须留存文件）：
+```java
+File dst = new File(context.getCacheDir(), CACHE_FILE);
+if (!dst.isFile() || dst.length() == 0) {
+    InputStream in = context.getContentResolver()
+            .openInputStream(StateKeys.fontUri());   // content://cn.qxfly.aod.state/font/<name>
+    // ... 复制到 dst ...
+}
+// Typeface 会 mmap 这个文件：dst 必须一直存在，不能 createFromFile 后立即删除
+Typeface tf = Typeface.createFromFile(dst);
+```
+
 实现路径：
 ```
 module/app/src/main/java/cn/qxfly/aod/CustomFontLoader.java
@@ -476,6 +733,27 @@ module/app/src/main/java/cn/qxfly/aod/MainActivity.java       # 导入 + fontSta
 - 定位：`AodOverlayController#applyAnchorOffset`（找到锚点视图 → `translationY` = 锚点边缘 ± `anchorGap`），
   找不到则回退 `#applyOffset` 的百分比 `offsetRatio`
 - shadow 模式下用**可见的**锁屏大时钟坐标（`#visibleClockSpan`）代替被淡出的组件锚点
+
+**关键源码**（`AnchorIds#canonicalCandidates` + `#legacyToCanonical`，跨样式/机型靠候选名与关键字）：
+```java
+static String[] canonicalCandidates(String canonical) {
+    switch (canonical) {
+        case "clock":    return new String[]{"gradient_layout", "clock_vertical_container",
+                                             "clock_container", "clock", "big_time"};
+        case "image":    return new String[]{"image_shower", "image_shower_container",
+                                             "image_selector_shower", "classic_gallery", ...};
+        case "timedate": return new String[]{"clock_horizontal_container", "date_lunar",
+                                             "date_dual", "date", "data_dual_container"};
+        case "notify":   return new String[]{"aod_icons_container", "icons", "fn_container", ...};
+        default: return null;
+    }
+}
+// 旧细粒度 id 按关键字折叠到 4 个粗粒度区域，认不出就原样使用
+if (l.contains("shower") || l.contains("image") || l.contains("cover")) return "image";
+if (l.contains("gradient") || l.contains("clock_container"))              return "clock";
+if (l.contains("icon") || l.contains("notif"))                            return "notify";
+if (l.contains("clock") || l.contains("date") || l.contains("time"))      return "timedate";
+```
 
 实现路径：
 ```
@@ -506,6 +784,20 @@ module/test/java/cn/qxfly/aod/AnchorIdsTest.java
 - `AppReporter` / `ModuleReporter`：状态、模块信息、组件列表、播放态镜像
 - 失败静默重试：`ModuleReporter#flushPendingIfReady`（SystemUI 里 Application 创建锚点不可靠）
 
+**关键源码**（`AodStateProvider#call` 分派 + 只有持久字段才落盘）：
+```java
+switch (method) {
+    case StateKeys.METHOD_UPDATE:
+        boolean durable = apply(extras);   // 返回是否为持久字段（样式/开关）
+        if (durable) persist();            // 歌词/进度每行都落盘是纯浪费
+        notifyChanged();                   // -> ContentResolver#notifyChange
+        return null;
+    case StateKeys.METHOD_GET:          return snapshot();
+    case StateKeys.METHOD_DIAG_REQUEST: sSnapshot.putString(DIAG_REQUEST, ...); notifyChanged(); return null;
+    case StateKeys.METHOD_CLEAR:        sSnapshot = new Bundle(); persist(); notifyChanged(); return null;
+}
+```
+
 实现路径：
 ```
 module/app/src/main/java/cn/qxfly/aod/AodLog.java
@@ -535,6 +827,28 @@ module/app/src/main/kotlin/cn/qxfly/aod/ui/pages/DiagnosticsPage.kt
   插件类加载器无关，先加载的也能抓到
 - LSPosed API 兼容：`AodLyricModule#buildHook` 仅在 `api >= API_102` 时 `setId`（101 上会 `NoSuchMethodError`）
 - 隐藏 API：`HiddenApi#exempt`
+
+**关键源码**（`ThemeProbeV2#matchesTarget` 尾部匹配 + `#watchLoaded` 全进程监视）：
+```java
+private static boolean matchesTarget(String name, String canonical, String tail) {
+    if (canonical.equals(name)) return true;
+    if (TAIL_MAML_ROOT.equals(tail)) return name.endsWith(tail);   // MAML 在 AOD 家族之外
+    return isAodFamily(name) && name.endsWith(tail);               // 限定 com.miui.aod / com.xiaomi.aod
+}
+
+// ClassLoader#loadClass 的返回值：任何进程里加载的类都会经过这里
+private void watchLoaded(Object result) {
+    if (!(result instanceof Class)) return;
+    Class<?> loaded = (Class) result;
+    String name = loaded.getName();
+    if (name.startsWith("com.miui.aod.")) AodLog.i("AOD class loaded: " + name);
+    if (matchesTarget(name, TARGET_DOZE_PLUGIN, TAIL_DOZE_PLUGIN)
+            && sPluginHooked.compareAndSet(false, true)) {
+        mOverlay.onPluginImplLoaded(loaded);     // 与插件类加载器无关
+    }
+    ...
+}
+```
 
 已验证机型：
 
@@ -595,7 +909,7 @@ module/test/java/cn/qxfly/aod/                                 # AllTests + T + 
 
 ---
 
-## 附录：取证命令速查
+## 附录 A：取证命令速查
 
 ```powershell
 $adb = "D:\GitSoftware\scrcpy-win64-v3.2\adb.exe"
@@ -631,3 +945,122 @@ $adb = "D:\GitSoftware\scrcpy-win64-v3.2\adb.exe"
 2. 数据在动但屏幕不动 → 看 `Display State`：`DOZE_SUSPEND` 就是没送帧（`screencap` 会骗人）
 3. 触摸没反应 → 先确认有没有碰 `setTouchMode`；再看是否处在 pulse 周期
 4. 暂停后不省电 → 看 `panel state -> DOZE_SUSPEND` 是否出现、`gfxinfo` 是否停增
+
+---
+
+## 附录 B：解包取证档案
+
+> 目的：**避免重复解包、反复读源码**。下面每条都是已经验证过的事实，来自反编译 `MIUIAod.apk` / SystemUI 与真机日志；
+> 新解包出的事实继续追加到这里，不要只留在对话里。
+
+### B.1 结论速查表
+
+| # | 事实 | 证据 | 对实现的影响 |
+|---|---|---|---|
+| 1 | HyperOS 3 起 AOD 不再跑独立进程，而是在 `com.android.systemui` 里加载 `MIUIAod.apk` 插件 | `logProcess=com.android.systemui`；日志 `AOD class loaded: com.miui.aod...` | 所有 hook 必须进 SystemUI；`logProcess` 可自查 |
+| 2 | 真正运行的 doze 状态机是 **SystemUI 的** `com.android.systemui.doze.DozeMachine` | `com.miui.aod.doze.DozeMachine` 从未出现在 `AOD class loaded` 日志 | 守卫挂在 `com.miui.aod.doze.DozeMachine` 上等于没挂（历史坑） |
+| 3 | `MiuiDozeService` 继承 `DreamService`，**未覆写** `setDozeScreenState(int)` | 反编译 `com.android.keyguard.doze.MiuiDozeService` 方法表 | `DreamService#setDozeScreenState` 是唯一漏斗，4→3 改写必然覆盖所有路径 |
+| 4 | 直板机上 MIUI **从不**把 touch mode 19 置 1 | `DozeHost.lambda$startEnterAnim$10`、`DozeTriggers.lambda$transitionTo$0` 均置 0；置 1 只见于折叠屏路径 | **禁止**再调 `Utils.setTouchMode(0,19,1)`，否则播放中触摸全失效 |
+| 5 | MIUI 自己的双击亮屏有三重门 | `DozeHost#onTouch`：`mSupportGestureWakeup && mOpenDoubleTapGoToSleep && needKeepScreenOnAtFirst()` | 第三项随 AOD 样式恒 false → 必须模块自识别双击 |
+| 6 | AOD 插件视图根由 `DozeServicePluginImpl#onDreamingStarted(ViewGroup)` 交出 | 日志 `overlay parented to clock container: clock:yes` | 挂歌词的唯一入口 |
+| 7 | 全屏 AOD 下插件内容树被整体淡出（祖先链 alpha<0.05） | 运行时检测 | 歌词要改挂 keyguard `AodView#aod_root_view`（shadow 模式） |
+| 8 | `DOZE_SUSPEND` 下合成器停止送帧，但 `screencap` 仍能读到新缓冲区 | `Display State=DOZE_SUSPEND` 时 `gfxinfo` 不增 | 排障必须看 `gfxinfo`，不能只看截图 |
+| 9 | 多屏机型的显示状态在 `dumpsys display`（`dumpsys power` 没有） | 实测 | 用 `Display Id=0` 取主屏 |
+
+### B.2 关键类 / 方法 / Hook 点
+
+| 类#方法 | 访问 | 用途 | 备注 |
+|---|---|---|---|
+| `android.service.dreams.DreamService#setDozeScreenState(int)` | `getDeclaredMethod` + `setAccessible` | **改写 4→3**（面板刷新核心） | `MiuiDozeService` 未覆写，故这是唯一拦截点 |
+| `com.android.keyguard.doze.MiuiDozeService#onCreate` | hook | 捕获 `sDreamService` 实例 | `applyDozeState` 的调用目标 |
+| `com.android.systemui.doze.DozeMachine` 构造器 | hook | 读 `mState` 字段 | 机器状态用于 park/自愈判断 |
+| `com.miui.aod.doze.DozeServicePluginImpl#onDreamingStarted(ViewGroup)` | hook | AOD 生命周期根 | 歌词挂载入口 |
+| `com.miui.aod.doze.DozeService` | hook | AOD 服务生命周期 | |
+| `com.miui.aod.utils.CommonUtils` | 仅探测 | 未见需要改写 | 用于确认插件已加载 |
+| `com.miui.maml.ScreenElementRoot` | hook | `forceTraversal` / `driveFramerate` | MAML 在 AOD 家族包名之外，按尾部匹配 |
+| `android.view.ViewGroup#dispatchTouchEvent(MotionEvent)` | 沿父类链找声明类 | 触摸/双击监听 | `AodView` 自己不声明，必须向上找 |
+| `com.miui.aod.AodView` / id `aod_root_view` | 运行时 | keyguard 全屏 AOD 根 | shadow 模式挂载点 |
+| `com.android.systemui.doze.DozeHost#onTouch` | 只读证据 | 三重门 | 解释了为何不能依赖原生双击 |
+| `com.miui.aod.utils.Utils#setTouchMode(int,int,int)` | ⛔ 禁用 | 无刷新作用且吞触摸 | 见 B.4 |
+
+### B.3 Display / Doze 状态值
+
+| 值 | 含义 |
+|---|---|
+| `Display.STATE_OFF = 1` | 灭屏（AOD 被抑制，帧数 0） |
+| `Display.STATE_ON = 2` | 亮屏 |
+| `Display.STATE_DOZE = 3` | 息屏显示，**合成器持续送帧** |
+| `Display.STATE_DOZE_SUSPEND = 4` | 面板自刷新，**不再送新帧** |
+
+`DozeMachine.State` 名称：`UNINITIALIZED`、`INITIALIZED`、`DOZE_AOD`、`DOZE_REQUEST_PULSE`、
+`DOZE_PULSING`、`DOZE_PULSE_DONE`、`DOZE_AOD_PAUSED`、`DOZE_AOD_DOCKED`、`FINISH`。
+
+- **瞬时态**（park 时必须等，每 500ms 重试）：`UNINITIALIZED` / `INITIALIZED` / `DOZE_REQUEST_PULSE` / `DOZE_PULSING`
+- **FINISH**：已唤醒 / dream 已拆除 → 交还系统，不要写 4
+- **稳定态自愈**：`DOZE_AOD` / `DOZE_AOD_PAUSED` / `DOZE_PULSE_DONE` 且未持有面板 → 补写 4
+- pulse 状态持续 > `STUCK_PULSE_MS=5000` 视为卡住 → 同样补写 4
+
+### B.4 触摸 / 双击：反编译结论
+
+1. `DozeHost.lambda$startEnterAnim$10` 与 `DozeTriggers.lambda$transitionTo$0` 都调用
+   `Utils.setTouchMode(0, 19, 0)`（**置 0**）。直板机没有任何路径把 mode 19 置 1（置 1 仅折叠屏）。
+   → 模块曾调 `(0,19,1)` / `(0,11,1)` 想「打开触摸」，实际是把触控 IC 切进 MIUI 不使用的状态，
+   表现为**播放中 AOD 触摸全失效**（8.1.3 的严重回归）。
+2. 推送版之所以「看起来能用」，是因为当时用 `getMethod` 找不到 **private static** 方法，调用静默失败。
+3. `DozeHost#onTouch` 的三重门：`mSupportGestureWakeup && mOpenDoubleTapGoToSleep && needKeepScreenOnAtFirst()`；
+   第三项随 AOD 样式恒 false → 原生双击路径不可用，必须模块自己判定。
+4. 双击判定参数（现行）：单次按下→抬起 <300ms 且位移 <80px；两次间隔 <300ms 且位移 <160px。
+
+### B.5 pulse 广播为何被丢
+
+- `com.android.systemui.doze.pulse` 会经过 AOSP `DozeTriggers` 的守卫，非 dozing / 不允许时直接丢弃。
+- pulse 周期内 `PowerManager.wakeUp()` 也会被吞（实测双击失效 1–2s）。
+- 结论：pulse 只作为历史方案保留，现行刷新靠 **Display State 4→3**，双击靠模块自识别 + 重试兜底。
+
+### B.6 主题内容列实测（不是反编译，但同样不要重复测）
+
+Xiaomi `2509FPN0BC`（1200x2608）：
+
+```
+clockGradientLinearLayout|[339,685 521x193]
+timedateLinearLayout     |[339,685 521x67]
+```
+
+主题内容列只有 **521px @ x=339**；`MATCH_PARENT` 只能拿到 521px，长句会提前换行。
+
+关键布局事实：**列是 wrap_content 且水平居中**（第一版实测 `339 + 521/2 ≈ 600 = 屏心`）。
+由此推出两条硬约束（都真机踩过）：
+
+1. `MATCH_PARENT` 被夹到 521 → 必须用**显式像素宽度**；
+2. **负 `leftMargin` 不可用**：margin 计入列的 wrap_content 宽度，列被拖窄、居中位置后移，
+   误差每 tick 只收敛 ~0.55 倍（首帧偏左 70–85px，6s 阶梯右移）。
+   水平偏移只能用 **`translationX`**（渲染属性，不参与布局），并加整屏宽门槛（见 F 节）。
+
+### B.7 Android 17 / HyperOS 4 兼容复检（2026-11-22 实测）
+
+设备 `2509FPN0BC`（SDK 37 / HyperOS 4.0）上以下类**全部存在、未漂移**：
+
+`DozeServicePluginImpl` / `DozeMachine` / `CommonUtils` / `Utils` / `MiuiDozeService` /
+`DozeService` / `DozeServiceHost` / `DreamService#setDozeScreenState`。
+
+实测：播放 `Display State=DOZE`，8s **+1946~1964 帧**；暂停 **+2s 回 `DOZE_SUSPEND`**，30s 不回弹。
+
+### B.8 解包方法（下次直接照做）
+
+```powershell
+$adb = "D:\GitSoftware\scrcpy-win64-v3.2\adb.exe"
+
+# 1) 找 AOD 插件 apk（路径随版本可能变化，以 find 结果为准）
+& $adb shell "find /system_ext /system /product -name 'MIUIAod.apk' 2>/dev/null"
+& $adb pull <上面的路径> work\_decomp\MIUIAod.apk
+
+# 2) 反编译（jadx 示例；产物只放 work/，不要提交）
+jadx -d work\_decomp\miuiaod work\_decomp\MIUIAod.apk
+
+# 3) 查关键点
+Get-ChildItem work\_decomp\miuiaod -Recurse -Filter DozeHost.java | Select-Object FullName
+Select-String -Path work\_decomp\miuiaod\**\*.java -Pattern "setTouchMode"
+Select-String -Path work\_decomp\miuiaod\**\*.java -Pattern "onDreamingStarted|setDozeScreenState"
+```
+
+> 反编译产物仅用于查证，结论写回本附录后即可删除；不要把 `work/_decomp` 提交进仓库。
