@@ -1819,6 +1819,7 @@ build.ps1                              ← 唯一构建入口（版本号取自 
 dist/                                  ← 构建产物 qxfly-aod-<versionName>.apk
 docs/                                  ← 全部文档与界面参考图
 ├── README.md                          ← 本文件
+├── IMPLEMENTATION.md                  ← 功能实现索引（更新制：旧实现保留，追加新实现）
 ├── BISECT.md                          ← 历史故障排查/复盘
 ├── COMPOSE_SETUP.md                   ← 工具链（.deps）搭建说明
 ├── LSPosed-API102适配指南.md
