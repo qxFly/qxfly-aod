@@ -199,7 +199,7 @@ module/app/src/main/java/cn/qxfly/aod/MamlBridge.java        # forceTraversal / 
 
 ## F. 歌词宽度约束
 
-### 当前实现 🧪（2026-11-23 新增，待真机复核）
+### 当前实现 ✅（2026-11-23，真机已验证）
 
 `AodOverlayController#applyFullWidth(TextView)`：
 
@@ -212,6 +212,17 @@ module/app/src/main/java/cn/qxfly/aod/MamlBridge.java        # forceTraversal / 
 
 配合 `#relaxClipping` 让溢出可见；对齐方式仍生效（居中=屏幕居中）。
 
+**实测证据**（Xiaomi `2509FPN0BC` / Android 17 / HyperOS 4，主屏 1200x2608）：
+
+```
+overlay geometry: xy=0,1233 size=1200x351   (34sp)
+overlay geometry: xy=0,1207 size=1200x815   (44sp 四行)
+主题内容列快照:  clockGradientLinearLayout|[339,685 521x193]   ← 只有 521px @ x=339
+```
+
+- 视图 `x=0`、`width=1200` = 整屏；单行文字实测宽 **1009–1039px**（旧 521px 列约只能装 5 个字）
+- `full-width apply failed` **0 次**；切歌 / 改字号 / 防烧屏漂移（`clock_container` ty −211→−237）全程 `size=1200` 不变
+
 实现路径：
 ```
 module/app/src/main/java/cn/qxfly/aod/AodOverlayController.java   # applyFullWidth
@@ -222,7 +233,7 @@ module/app/src/main/java/cn/qxfly/aod/AodOverlayController.java   # applyFullWid
 | 日期 | 做法 | 结果 |
 |---|---|---|
 | 3.0.0 起 | `lp.width = MATCH_PARENT` | ⛔ 被主题内容列宽限制（实测 **521px / 屏宽 1200px**），长句提前换行 |
-| 2026-11-23 | 显式屏宽 + `translationX` 补偿（本条） | 🧪 待复核：期望文字可用宽度接近整屏 |
+| 2026-11-23 | 显式屏宽 + `translationX` 补偿（本条） | ✅ 真机 `xy=0 / size=1200xH`，单行文字 1009–1039px；三条放置路径均接入，kicker 每秒重申 |
 
 ---
 
@@ -250,6 +261,7 @@ module/app/src/main/java/cn/qxfly/aod/AodOverlayController.java   # applyFullWid
 | 2026-11-16 | 祖先链关闭裁剪 + 自然高度测量 | ✅ 溢出画进 AOD 空白区 |
 | 2026-11-17 | 预算扩高（`expandFlowSpace`） | ✅ 修「下方时间日期/通知被挤压」 |
 | 2026-11-17 | 增量再扩（`maybeExpandBudget`） | ✅ 修长句换行后再次被裁 |
+| 2026-11-23 | 整屏宽后复核大字号 | ✅ 44sp **三行/四行**均完整：自然高度 351→623→815px，`expanded lyric budget` 连扩 5 次（363→512→655→827→1017px），文字 bbox 完整落在背景框内（上留 ~66px / 下留 ~56px），无裁切 |
 
 ---
 

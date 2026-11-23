@@ -231,6 +231,7 @@ public final class AodOverlayController {
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT);
             host.addView(tv, params);
+            applyFullWidth(tv);
 
             // The theme is inflated AFTER onDreamingStarted, so clock_container
             // usually does not exist yet at this point and we land on the root -
@@ -360,6 +361,57 @@ public final class AodOverlayController {
     }
 
     /**
+     * Lets the lyric use the FULL screen width in every AOD theme.
+     *
+     * <p>The theme's content column is narrower than the panel (measured:
+     * 521px of a 1200px screen) and usually offset from the left edge, so
+     * {@code MATCH_PARENT} silently caps the line length and wraps long lyrics
+     * early. Two things are needed:
+     *
+     * <ul>
+     *   <li>an explicit pixel width - a positive {@code LayoutParams.width} is
+     *       measured EXACTLY, so the parent's narrower measure spec no longer
+     *       clamps it;</li>
+     *   <li>a translationX that cancels the parent's on-screen left edge, so the
+     *       view really starts at the screen's left edge instead of the
+     *       column's.</li>
+     * </ul>
+     *
+     * <p>Clipping is already relaxed along the chain ({@link #relaxClipping}),
+     * so the overflow is drawn. Re-applied every kicker tick because MIUI drifts
+     * the AOD container for anti-burn-in and themes rebuild their params.
+     */
+    private static void applyFullWidth(@NonNull TextView tv) {
+        try {
+            int full = tv.getResources().getDisplayMetrics().widthPixels;
+            ViewGroup root = sRootRef == null ? null : sRootRef.get();
+            if (root != null && root.getWidth() > full) {
+                full = root.getWidth();
+            }
+            if (full <= 0) {
+                return;
+            }
+            ViewGroup.LayoutParams lp = tv.getLayoutParams();
+            if (lp != null && lp.width != full) {
+                lp.width = full;
+                tv.setLayoutParams(lp);
+            }
+            android.view.ViewParent parent = tv.getParent();
+            if (parent instanceof ViewGroup) {
+                ViewGroup g = (ViewGroup) parent;
+                int[] loc = new int[2];
+                g.getLocationOnScreen(loc);
+                float dx = -(loc[0] + g.getPaddingLeft());
+                if (Math.abs(tv.getTranslationX() - dx) > 0.5f) {
+                    tv.setTranslationX(dx);
+                }
+            }
+        } catch (Throwable t) {
+            AodLyricModule.w("full-width apply failed: " + t);
+        }
+    }
+
+    /**
      * Relaxes the clip on every container from the lyric up to the AOD root.
      *
      * <p>The theme's content column has a fixed height; a large lyric font
@@ -451,6 +503,7 @@ public final class AodOverlayController {
                 // keyguard's own clock/notification views are SIBLINGS of this
                 // root, so only the (hidden) AOD content can be overlapped.
                 root.addView(tv, lp);
+                applyFullWidth(tv);
                 relaxClipping(root, tv);
                 AodLyricModule.i("shadow mode: lyric parented to "
                         + root.getClass().getSimpleName());
@@ -837,6 +890,7 @@ public final class AodOverlayController {
         }
         index = Math.max(0, Math.min(index, flow.getChildCount()));
         flow.addView(tv, index, lp);
+        applyFullWidth(tv);
         tv.setTranslationY(0f);
         AodLyricModule.i("lyric inserted into flow " + flow.getClass().getSimpleName()
                 + " at index " + index + " (" + (above ? "above" : "below")
@@ -2611,6 +2665,9 @@ public final class AodOverlayController {
                         // Keep the flow budget tall enough for the current
                         // text (re-wraps and style changes raise the height).
                         maybeExpandBudget(view);
+                        // Full-screen width, re-asserted: the theme may rebuild
+                        // params and MIUI drifts the container for burn-in.
+                        applyFullWidth(view);
                         if (view.getVisibility() != android.view.View.VISIBLE) {
                             view.setVisibility(android.view.View.VISIBLE);
                         }

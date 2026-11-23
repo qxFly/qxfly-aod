@@ -489,6 +489,38 @@ kicker 也不再 `driveFramerate()`，恢复播放时照常重启。
 SystemUI CPU ~20%；**模块 idle 时同样如此**，因此判断为 MIUI 自身 AOD 动画，
 不是本模块的帧泵（亮屏空闲基线约 9.5fps）。此项未继续深挖。
 
+## 8.1.7：歌词整屏宽 + 高度放开（2026-11-23 第二十四轮）
+
+### 需求
+
+所有息屏模式/主题下，歌词**宽度不受主题内容列限制**（最宽可达整屏），并尽量解除内容高度限制。
+
+### 实现
+
+新增 `AodOverlayController#applyFullWidth(TextView)`：
+
+1. `lp.width = 屏幕宽像素`（正数 width 按 `EXACTLY` 测量 → 父容器再窄也夹不住）
+2. `translationX = -(父容器屏幕左坐标 + 父容器 paddingLeft)` → 歌词左边缘对齐**屏幕**左边缘
+3. 三条放置路径全部接入（`attach` / `insertIntoFlow` / `applyShadowPlacement`），kicker 每 tick 重申
+   （MIUI 防烧屏漂移容器、主题会重建 LayoutParams）
+
+高度侧沿用既有四层机制（自然高度测量 / 祖先预算扩高 / 增量再扩 / 全链解除裁剪），
+TextView 不设 `maxLines` / `ellipsize` / `singleLine`。
+
+### 真机实测（Xiaomi 2509FPN0BC / Android 17 / HyperOS 4 / 1200x2608）
+
+| 项 | 数据 |
+|---|---|
+| 视图几何 | `overlay geometry: xy=0,1233 size=1200x351`（34sp）、`xy=0,1207 size=1200x815`（44sp 四行） |
+| 主题内容列 | `clockGradientLinearLayout|[339,685 521x193]` —— 只有 **521px @ x=339**，已被绕过 |
+| 单行文字宽 | **1009px**（34sp）/ **1039px**（44sp），旧列约只能装 5 个字 |
+| 大字号不裁切 | 44sp 三行/四行完整，自然高度 351→623→815px |
+| 预算扩高 | `expanded lyric budget` 连扩 5 次：363→512→655→827→1017px |
+| 失败计数 | `full-width apply failed` **0 次** |
+| 回归 | 播放 `DOZE`、暂停 `DOZE_SUSPEND`；切歌/改字号/防烧屏漂移全程 `size=1200` 不变 |
+
+实现索引见 `docs/IMPLEMENTATION.md` 的 F（宽度）/ G（高度）两节。
+
 ## 8.0.0：Miuix 界面（骨架合并）
 
 `miuix/` 下的 Miuix 模板骨架（Miuix 0.9.4 + Compose，Gradle 构建）已合并进主模块：
