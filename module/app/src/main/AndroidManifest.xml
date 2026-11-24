@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="cn.qxfly.aod"
-    android:versionCode="261123001"
-    android:versionName="2.4.261123.001">
+    android:versionCode="261124002"
+    android:versionName="2.4.261124.002">
 
     <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="34" />
 

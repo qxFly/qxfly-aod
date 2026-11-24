@@ -53,7 +53,18 @@ public final class AodOverlayController {
 
     private static final AtomicReference<TextView> sView = new AtomicReference<>();
 
-
+    /**
+     * Every overlay TextView this process has created.
+     *
+     * <p>A deferred UI runnable from a dead AOD session used to be able to
+     * re-parent its OLD view into the NEW session: it resolved the static
+     * clock container at execution time, so after detach()+attach() it could
+     * {@code addView()} a view nobody updates any more. On screen that is a
+     * frozen, misplaced second lyric that survives pause and never clears.
+     * Keeping a registry lets attach / idle / kicker sweep such strays away.
+     */
+    private static final java.util.List<java.lang.ref.WeakReference<TextView>> sAllViews =
+            java.util.Collections.synchronizedList(new java.util.ArrayList<>());
 
     private final XposedInterface mXp;
     @NonNull
@@ -80,6 +91,63 @@ public final class AodOverlayController {
     /** True while a line is actually rendered (idle AOD = nothing to tick). */
     static boolean hasContent() {
         return sActive && sLastText != null && !sLastText.isEmpty();
+    }
+
+    /** Remembers an overlay view so strays can be swept on later sessions. */
+    private static void registerView(@NonNull TextView tv) {
+        synchronized (sAllViews) {
+            for (int i = sAllViews.size() - 1; i >= 0; i--) {
+                if (sAllViews.get(i).get() == null) {
+                    sAllViews.remove(i);
+                }
+            }
+            sAllViews.add(new java.lang.ref.WeakReference<>(tv));
+        }
+    }
+
+    /**
+     * Removes every overlay view except {@code keep} and the current view.
+     *
+     * <p>Main thread only. Strays are views a dead session's queued runnable
+     * re-attached; they no longer receive text updates, so they must not stay
+     * in the AOD tree (they look like a frozen, offset second lyric).
+     */
+    private static void removeStrayViews(@Nullable TextView keep) {
+        TextView current = sView.get();
+        java.util.List<TextView> strays = null;
+        synchronized (sAllViews) {
+            for (int i = sAllViews.size() - 1; i >= 0; i--) {
+                TextView v = sAllViews.get(i).get();
+                if (v == null) {
+                    sAllViews.remove(i);
+                    continue;
+                }
+                if (v == keep || v == current) {
+                    continue;
+                }
+                if (strays == null) {
+                    strays = new java.util.ArrayList<>();
+                }
+                strays.add(v);
+                sAllViews.remove(i);
+            }
+        }
+        if (strays == null) {
+            return;
+        }
+        for (TextView v : strays) {
+            android.view.ViewParent p = v.getParent();
+            try {
+                if (p instanceof ViewGroup) {
+                    ((ViewGroup) p).removeView(v);
+                }
+                v.setText("");
+            } catch (Throwable t) {
+                AodLyricModule.w("stray overlay cleanup failed: " + t);
+            }
+            AodLyricModule.w("stray overlay removed (parent="
+                    + (p == null ? "null" : p.getClass().getSimpleName()) + ")");
+        }
     }
 
     /** Process-wide module interface, for static helpers (touch watch, pulses). */
@@ -204,8 +272,23 @@ public final class AodOverlayController {
         // system double-tap-wake setting (Settings.System "gesture_wakeup").
         AodLyricModule.i("double-tap wake setting (gesture_wakeup)="
                 + (systemDoubleTapWakeEnabled(root.getContext()) ? "on" : "off"));
-        if (sView.get() != null) {
-            return;
+        TextView existing = sView.get();
+        if (existing != null) {
+            // Same AOD window and the view is still in a tree: keep it.
+            if (sAodVisible && existing.getParent() != null) {
+                removeStrayViews(existing);
+                return;
+            }
+            // A view left over from a closed/rebuilt window (or pulled out by
+            // hideOverlay) must not be reused blindly: drop it before creating
+            // the new session's view, otherwise the old line stays on screen.
+            android.view.ViewParent oldParent = existing.getParent();
+            if (oldParent instanceof ViewGroup) {
+                ((ViewGroup) oldParent).removeView(existing);
+            }
+            existing.setText("");
+            sView.compareAndSet(existing, null);
+            AodLyricModule.w("stale overlay view replaced on AOD attach");
         }
         try {
             Context context = root.getContext();
@@ -253,6 +336,9 @@ public final class AodOverlayController {
             // process-lifetime one-shot kept serving a stale list until the
             // com.miui.aod process happened to die.
             root.postDelayed(() -> {
+                if (sRootRef == null || sRootRef.get() != root) {
+                    return; // tree belongs to a closed AOD window
+                }
                 TextView tvNow = sView.get();
                 if (tvNow == null || tvNow.getParent() == null) {
                     return; // AOD already stopped; skip a dead-tree report
@@ -277,7 +363,18 @@ public final class AodOverlayController {
             // screen and crashed the AOD UI. 5.4.0 proved the doze pulse alone is
             // enough to refresh the TextView, so a separate surface is not needed.
             sView.set(tv);
+            registerView(tv);
+            removeStrayViews(tv);
             sAodVisible = true;
+            // A fresh session must not inherit the previous render cache,
+            // otherwise the first setText() can no-op on an identical
+            // signature and the new view keeps whatever stale spanned text
+            // the last session left behind.
+            sLastSignature = null;
+            sLastSpanned = null;
+            sLastText = null;
+            sActive = false;
+            sPaused = false;
             sAttachedAt = android.os.SystemClock.elapsedRealtime();
 
             // The AOD's own content is added by dozeService.dreamingStarted(),
@@ -1439,22 +1536,34 @@ public final class AodOverlayController {
         setPanelHold(false);
         sRootRef = null;
         sLastText = null;
+        sLastSpanned = null;
+        sLastSignature = null;
+        sActive = false;
+        sPaused = false;
+        sContentAt = 0L;
         sShadowMode = false;
         sHiddenStreak = 0;
+        // The next AOD session must not resolve placement through a container
+        // that belongs to the window we are leaving.
+        sClockContainer = null;
+        sInClockContainer = false;
 
         TextView tv = sView.getAndSet(null);
         sAodVisible = false;
         if (tv != null) {
             try {
-                ViewGroup parent = (ViewGroup) tv.getParent();
-                if (parent != null) {
-                    parent.removeView(tv);
+                android.view.ViewParent p = tv.getParent();
+                if (p instanceof ViewGroup) {
+                    ((ViewGroup) p).removeView(tv);
                 }
                 AodLyricModule.i("lyric overlay detached");
             } catch (Throwable t) {
                 AodLyricModule.w("lyric overlay detach failed: " + t);
             }
         }
+        // Nothing from this session may survive: any view the registry still
+        // knows about is a stray by definition now.
+        removeStrayViews(null);
     }
 
     /** Last text applied, so the log only reports real changes. */
@@ -1537,6 +1646,10 @@ public final class AodOverlayController {
         TextView tv = sView.get();
         if (tv != null) {
             postOnMain(() -> {
+                // Ignore style pushes aimed at a view from a closed session.
+                if (sView.get() != tv) {
+                    return;
+                }
                 applyStyle(tv, style);
                 ViewGroup root = sRootRef == null ? null : sRootRef.get();
                 if (root != null) {
@@ -1775,6 +1888,11 @@ public final class AodOverlayController {
     private static void scheduleReparent(@NonNull ViewGroup root, long delayMs) {
         try {
             root.postDelayed(() -> {
+                // A reparent scheduled by a previous AOD window must not pull
+                // the new session's view into the old (or a dead) container.
+                if (sRootRef == null || sRootRef.get() != root) {
+                    return;
+                }
                 TextView tv = sView.get();
                 if (tv == null || sInClockContainer || sShadowMode) {
                     return;
@@ -2015,12 +2133,19 @@ public final class AodOverlayController {
             // the host main thread (setLayoutParams from the poll thread threw
             // CalledFromWrongThread and left the containers expanded).
             postOnMain(() -> {
+                // An idle update queued by an old session must never touch the
+                // view that now belongs to a newer AOD window.
+                if (sView.get() != tv) {
+                    removeStrayViews(null);
+                    return;
+                }
                 restoreTouchedMargin();
                 tv.setText("");
                 android.view.ViewParent parent = tv.getParent();
                 if (parent instanceof ViewGroup) {
                     ((ViewGroup) parent).removeView(tv);
                 }
+                removeStrayViews(tv);
             });
         } catch (Throwable t) {
             AodLyricModule.w("hideOverlay failed: " + t);
@@ -2157,6 +2282,16 @@ public final class AodOverlayController {
     private static void applyText(@NonNull TextView tv, @NonNull CharSequence content) {
         try {
             postOnMain(() -> {
+                // CRITICAL: a runnable posted by the poller for the PREVIOUS
+                // AOD session must not re-attach its old view into the new
+                // session. currentParent() resolves the static clock container
+                // at execution time, so without this guard the old view lands
+                // in the new tree as a frozen, misplaced second lyric.
+                if (sView.get() != tv) {
+                    AodLyricModule.w("dropped stale overlay update (old AOD session)");
+                    return;
+                }
+                removeStrayViews(tv);
                 tv.setText(content);
                 java.lang.ref.WeakReference<ViewGroup> rootRef = sRootRef;
                 // Re-attach after hideOverlay() removed us.
@@ -2171,6 +2306,9 @@ public final class AodOverlayController {
                     if (rootAfter != null) {
                         applyOffset(tv, rootAfter);
                     }
+                    // The default MATCH_PARENT params above also reset the
+                    // full-screen width; re-assert it in the same pass.
+                    applyFullWidth(tv);
                 }
                 // A plain redraw never reaches the panel: the AOD caches its
                 // composition buffer and only re-captures after a STRUCTURAL
@@ -2675,6 +2813,17 @@ public final class AodOverlayController {
                 if (tick % 15 == 0) {
                     ThemeProbeV2.confirmPanelSuspended();
                 }
+                // Periodically sweep views left behind by a dead session even
+                // while idle (normally there are none; this is the safety net
+                // for an already-attached stray).
+                if (tick % 5 == 0) {
+                    postOnMain(() -> {
+                        TextView current = sView.get();
+                        if (current != null) {
+                            removeStrayViews(current);
+                        }
+                    });
+                }
                 return;
             }
             try {
@@ -2706,9 +2855,21 @@ public final class AodOverlayController {
                     // Throttled pulse from requestPulse(): flush it now.
                     requestPulse(swapContext());
                 }
-                boolean heavy = fresh;
+                // Paused content is static: never run the structural refresh
+                // (reinflate) while parked. The pause transition already gets
+                // one structural pass from applyText(); repeating it during the
+                // DOZE_SUSPEND window only risks the panel latching a frame
+                // captured mid-relayout.
+                boolean heavy = fresh && !sPaused;
                 postOnMain(() -> {
                     try {
+                        if (sView.get() != view) {
+                            // A queued tick from a session that already ended:
+                            // its view must not be re-added to the new AOD tree.
+                            AodLyricModule.w("dropped stale overlay tick (old AOD session)");
+                            return;
+                        }
+                        removeStrayViews(view);
                         // Prefer the real parent (the clock container) so a
                         // re-attach keeps the lyric inside the moving component.
                         ViewGroup parent = currentParent(view);

@@ -2,6 +2,7 @@
 /dist/
 /module/build/
 *.apk
+*.apk.*
 *.idsig
 
 # 本地工具链与临时目录
