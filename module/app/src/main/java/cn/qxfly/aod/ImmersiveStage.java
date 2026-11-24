@@ -598,25 +598,30 @@ public final class ImmersiveStage {
                         }
                         return;
                     }
-                    // Android 传感器坐标：X 向右、Y 向上、Z 朝用户。
-                    // 竖屏举起时 g=(0,-9.8,0)；顺时针横放 g=(+9.8,0,0)；
-                    // 逆时针横放 g=(-9.8,0,0)。设备相对竖屏转过的角度：
-                    double deviceDeg = 180.0 - Math.toDegrees(Math.atan2(gx, gy));
-                    deviceDeg = ((deviceDeg % 360) + 540) % 360 - 180;   // 归一化到 (-180,180]
+                    // 传感器坐标：X 向右、Y 向上、Z 朝用户。
+                    // TYPE_GRAVITY 给的是「世界向上」方向的投影：
+                    //   竖屏举起       g ≈ (0, +9.8)
+                    //   逆时针横放 90° g ≈ (+9.8, 0)
+                    //   顺时针横放 90° g ≈ (-9.8, 0)
+                    // 所以 atan2(gx, gy) 就是设备相对竖屏转过的角度（正=逆时针）。
+                    //
+                    // 方向已在真机校正：文字要转的角与设备转角同号
+                    // （上一版取了反号，用户反馈"横屏旋转方向反了"）。
+                    double deg = Math.toDegrees(Math.atan2(gx, gy));
+                    double abs = Math.abs(deg);
                     int rot;
-                    if (deviceDeg > 45 && deviceDeg < 135) {
-                        rot = -90;            // 顺时针横放 → 文字逆时针转回来
-                    } else if (deviceDeg < -45 && deviceDeg > -135) {
-                        rot = 90;             // 逆时针横放
-                    } else if (Math.abs(deviceDeg) >= 135) {
-                        rot = 0;              // 竖屏（含倒置，保持不翻转）
+                    if (abs > 45 && abs < 135) {
+                        rot = deg > 0 ? 90 : -90;
                     } else {
-                        return;               // 45° 附近：滞回区，保持当前角度
+                        // |deg|<45 竖屏；|deg|>=135 倒置 —— 都不翻转
+                        rot = 0;
                     }
                     if (rot == sRotation) {
                         return;
                     }
                     sRotation = rot;
+                    AodLyricModule.i("immersive orientation deg=" + Math.round(deg)
+                            + " -> rot=" + rot);
                     MAIN.post(() -> {
                         TextView tv = currentView();
                         if (tv != null) {
