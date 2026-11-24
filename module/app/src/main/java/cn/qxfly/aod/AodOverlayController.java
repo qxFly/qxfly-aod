@@ -319,6 +319,9 @@ public final class AodOverlayController {
                     ViewGroup.LayoutParams.WRAP_CONTENT);
             host.addView(tv, params);
             applyFullWidth(tv);
+            // 沉浸模式：把刚挂上的歌词搬进整屏舞台，并隐藏/遮住其它组件。
+            // 非沉浸时 sync 什么也不做（sStyle==null 或 immersive==0）。
+            ImmersiveStage.sync(root, tv, sStyle);
 
             // The theme is inflated AFTER onDreamingStarted, so clock_container
             // usually does not exist yet at this point and we land on the root -
@@ -503,6 +506,10 @@ public final class AodOverlayController {
      */
     private static void applyFullWidth(@NonNull TextView tv) {
         try {
+            if (ImmersiveStage.active()) {
+                // 舞台画布自己就是整屏宽度，再按屏幕宽度写死会撑破画布。
+                return;
+            }
             int full = fullWidthPx(tv);
             if (full <= 0) {
                 return;
@@ -555,6 +562,10 @@ public final class AodOverlayController {
      */
     private static void alignFullWidth(@NonNull TextView tv) {
         try {
+            if (ImmersiveStage.active()) {
+                // 画布里父容器左边缘就是 0，再取消一遍位移会把歌词推出屏幕。
+                return;
+            }
             int full = fullWidthPx(tv);
             if (full <= 0 || tv.getWidth() < full) {
                 // Still the theme's narrow view: the column is centred, so it
@@ -792,6 +803,12 @@ public final class AodOverlayController {
      * anti-burn-in drift as the anchor.
      */
     private static void applyOffset(@NonNull TextView tv, @NonNull ViewGroup root) {
+        if (ImmersiveStage.active()) {
+            // 沉浸模式自己管位置（含横屏旋转与防烧屏漂移），
+            // 不能再用锚点/百分比/树插入那套。
+            ImmersiveStage.layout(tv);
+            return;
+        }
         try {
             relaxClipping(root, tv);
             ensureShadowMode(tv);
@@ -1082,6 +1099,10 @@ public final class AodOverlayController {
     private static void maybeExpandBudget(@NonNull TextView tv) {
         // Shadow mode: the AOD flow containers are invisible, nothing to grow.
         if (sShadowMode) {
+            return;
+        }
+        // 沉浸模式：父容器是我们自己的画布，按"布局流"去撑高会把它撑变形。
+        if (ImmersiveStage.active()) {
             return;
         }
         if (!treeModeActive() || !sActive
@@ -1529,11 +1550,41 @@ public final class AodOverlayController {
         return ref == null ? null : ref.get();
     }
 
+    /**
+     * 把歌词放回普通模式的挂载点：优先时钟容器（跟随 MIUI 的防烧屏漂移），
+     * 找不到就退回 AOD 根。由 {@link ImmersiveStage#release} 在退出沉浸时调用；
+     * 必须放在这里，因为挂载点的解析逻辑属于本类。
+     */
+    static void reparentHome(@NonNull ViewGroup root, @NonNull TextView tv) {
+        try {
+            android.view.ViewParent p = tv.getParent();
+            if (p instanceof ViewGroup) {
+                ((ViewGroup) p).removeView(tv);
+            }
+            ViewGroup host = findClockContainer(root);
+            if (host == null) {
+                host = root;
+            } else {
+                sInClockContainer = true;
+                sClockContainer = new java.lang.ref.WeakReference<>(host);
+            }
+            host.addView(tv, new ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT));
+            applyFullWidth(tv);
+            AodLyricModule.i("lyric reparented home to "
+                    + host.getClass().getSimpleName());
+        } catch (Throwable t) {
+            AodLyricModule.w("reparentHome failed: " + t);
+        }
+    }
+
     private void detach() {
         stopRootMotion();
         stopPulse();
         stopKicker();
         setPanelHold(false);
+        ImmersiveStage.reset();
         sRootRef = null;
         sLastText = null;
         sLastSpanned = null;
@@ -1653,6 +1704,8 @@ public final class AodOverlayController {
                 applyStyle(tv, style);
                 ViewGroup root = sRootRef == null ? null : sRootRef.get();
                 if (root != null) {
+                    // 沉浸开关可能刚被切换：先同步舞台，再定位。
+                    ImmersiveStage.sync(root, tv, style);
                     applyOffset(tv, root);
                 }
                 AodLyricModule.i("lyric style applied: size=" + style.textSizeSp
@@ -1894,7 +1947,8 @@ public final class AodOverlayController {
                     return;
                 }
                 TextView tv = sView.get();
-                if (tv == null || sInClockContainer || sShadowMode) {
+                if (tv == null || sInClockContainer || sShadowMode
+                        || ImmersiveStage.active()) {
                     return;
                 }
                 try {
@@ -2000,6 +2054,8 @@ public final class AodOverlayController {
     private static void markTouched() {
         sLastInteractiveAt = android.os.SystemClock.elapsedRealtime();
         sTouched = true;
+        // 黑幕会挡住屏下指纹：触摸时先把整屏让出来。
+        ImmersiveStage.onTouch();
         if (sPulseJustFired) {
             // A pulse was in flight when the touch arrived - log it, this is the
             // collision that used to crash the AOD UI.
@@ -2141,6 +2197,13 @@ public final class AodOverlayController {
                 }
                 restoreTouchedMargin();
                 tv.setText("");
+                if (ImmersiveStage.active()) {
+                    // 沉浸模式：舞台留着，只让出整屏（否则时钟/指纹一直看不到）。
+                    // 视图不能从画布里摘掉，否则下一句回来时得重建整条链路。
+                    ImmersiveStage.setContentVisible(false);
+                    removeStrayViews(tv);
+                    return;
+                }
                 android.view.ViewParent parent = tv.getParent();
                 if (parent instanceof ViewGroup) {
                     ((ViewGroup) parent).removeView(tv);
@@ -2293,6 +2356,11 @@ public final class AodOverlayController {
                 }
                 removeStrayViews(tv);
                 tv.setText(content);
+                if (ImmersiveStage.active()) {
+                    // 有歌词了：舞台重新盖上来（无歌词时它会让出整屏）。
+                    ImmersiveStage.ensureAttached(tv);
+                    ImmersiveStage.setContentVisible(true);
+                }
                 java.lang.ref.WeakReference<ViewGroup> rootRef = sRootRef;
                 // Re-attach after hideOverlay() removed us.
                 ViewGroup parent = currentParent(tv);
@@ -2517,6 +2585,11 @@ public final class AodOverlayController {
      * itself IS the z-order, so this becomes a no-op.
      */
     private static void ensureFront(@NonNull TextView tv) {
+        if (ImmersiveStage.active()) {
+            // 要压到最上面的是舞台，不是画布里的歌词。
+            ImmersiveStage.bringToFront();
+            return;
+        }
         if (treeModeActive()) {
             return;
         }
@@ -2870,6 +2943,12 @@ public final class AodOverlayController {
                             return;
                         }
                         removeStrayViews(view);
+                        // 沉浸模式：舞台可能被主题/重建摘掉，先保证歌词还在画布里，
+                        // 再做防烧屏漂移与组件隐藏的周期性校正。
+                        if (ImmersiveStage.active()) {
+                            ImmersiveStage.ensureAttached(view);
+                            ImmersiveStage.tick();
+                        }
                         // Prefer the real parent (the clock container) so a
                         // re-attach keeps the lyric inside the moving component.
                         ViewGroup parent = currentParent(view);

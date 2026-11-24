@@ -97,6 +97,10 @@ data class StyleDraft(
     val showProgress: Boolean = false,
     /** true = 暂停时把当前歌词变暗保留。 */
     val pauseKeep: Boolean = true,
+    /** 沉浸模式：0 关闭 / 1 纯黑 / 2 保留壁纸。 */
+    val immersive: Int = 0,
+    /** true = 设备横放时把歌词转 90°。 */
+    val landscape: Boolean = false,
 )
 
 internal fun LyricStyle.toDraft() = StyleDraft(
@@ -121,6 +125,8 @@ internal fun LyricStyle.toDraft() = StyleDraft(
     showNext = showNext,
     showProgress = showProgress,
     pauseKeep = pauseKeep,
+    immersive = immersive,
+    landscape = landscape,
 )
 
 internal fun StyleDraft.toLyricStyle() = LyricStyle().apply {
@@ -145,6 +151,8 @@ internal fun StyleDraft.toLyricStyle() = LyricStyle().apply {
     showNext = this@toLyricStyle.showNext
     showProgress = this@toLyricStyle.showProgress
     pauseKeep = this@toLyricStyle.pauseKeep
+    immersive = this@toLyricStyle.immersive
+    landscape = this@toLyricStyle.landscape
 }
 
 /** 粗粒度锚点（与 Hook 侧 ANCHOR_* 一致）：大时钟 / 图片 / 时间日期组件 / 通知。 */
@@ -585,6 +593,41 @@ internal fun StyleEditorCard(data: ModuleData) {
             onChange = { v -> draft = draft.copy(pauseKeep = v) },
         )
 
+        Spacer(Modifier.height(12.dp))
+        Text(
+            text = stringResource(R.string.style_immersive_section),
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+        )
+        OverlayDropdownPreference(
+            title = stringResource(R.string.style_immersive),
+            items = listOf(
+                stringResource(R.string.style_immersive_off),
+                stringResource(R.string.style_immersive_black),
+                stringResource(R.string.style_immersive_wallpaper),
+            ),
+            selectedIndex = draft.immersive.coerceIn(0, 2),
+            onSelectedIndexChange = { index ->
+                draft = draft.copy(immersive = index)
+            },
+        )
+        Text(
+            text = stringResource(R.string.style_immersive_summary),
+            fontSize = 11.sp,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+        )
+        Text(
+            text = stringResource(R.string.style_immersive_hint),
+            fontSize = 11.sp,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+        )
+        LabeledSwitchRow(
+            title = stringResource(R.string.style_landscape),
+            summary = stringResource(R.string.style_landscape_summary),
+            checked = draft.landscape,
+            onChange = { v -> draft = draft.copy(landscape = v) },
+        )
+
         Spacer(Modifier.height(10.dp))
         Row(
             Modifier.fillMaxWidth(),
@@ -770,6 +813,8 @@ private fun StyleDraft.toJson(): String = org.json.JSONObject().apply {
     put("showNext", showNext)
     put("showProgress", showProgress)
     put("pauseKeep", pauseKeep)
+    put("immersive", immersive)
+    put("landscape", landscape)
 }.toString(2)
 
 private fun draftFromJson(raw: String): StyleDraft? = runCatching {
@@ -799,6 +844,8 @@ private fun draftFromJson(raw: String): StyleDraft? = runCatching {
         showNext = o.optBoolean("showNext", false),
         showProgress = o.optBoolean("showProgress", false),
         pauseKeep = o.optBoolean("pauseKeep", true),
+        immersive = o.optInt("immersive", 0),
+        landscape = o.optBoolean("landscape", false),
     )
 }.getOrNull()
 

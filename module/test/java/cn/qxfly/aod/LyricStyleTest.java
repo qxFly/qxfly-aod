@@ -21,6 +21,9 @@ final class LyricStyleTest {
         T.eq("style default radius (resolved)", 24f, s.resolvedBgRadiusDp());
         T.eq("style default alpha", 0.45f, s.bgAlpha);
         T.ok("style default bg disabled", !s.bgEnabled);
+        // 沉浸默认关闭：不改变现有用户看到的息屏。
+        T.eq("style default immersive", 0, s.immersive);
+        T.ok("style default landscape off", !s.landscape);
     }
 
     private static void clamp() {

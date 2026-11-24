@@ -92,6 +92,15 @@ public final class LyricStyle {
     /** true = keep the line (dimmed) while playback is paused. */
     public boolean pauseKeep = true;
 
+    /**
+     * 沉浸模式：0 关闭 / 1 纯黑遮罩 / 2 保留壁纸（只隐藏组件）。
+     * 见 {@link StateKeys#STYLE_IMMERSIVE}。
+     */
+    public int immersive;
+
+    /** true = 设备横放时把歌词转 90°（AOD 窗口本身不跟随时）。 */
+    public boolean landscape;
+
     @NonNull
     public static LyricStyle fromBundle(@Nullable android.os.Bundle b) {
         LyricStyle s = new LyricStyle();
@@ -121,7 +130,29 @@ public final class LyricStyle {
         s.showNext = "1".equals(b.getString(StateKeys.STYLE_SHOW_NEXT));
         s.showProgress = "1".equals(b.getString(StateKeys.STYLE_SHOW_PROGRESS));
         s.pauseKeep = !"0".equals(b.getString(StateKeys.STYLE_PAUSE_KEEP));
+        s.immersive = clampImmersive(parseDecimal(b.getString(StateKeys.STYLE_IMMERSIVE), 0));
+        s.landscape = "1".equals(b.getString(StateKeys.STYLE_LANDSCAPE));
         return s;
+    }
+
+    /** 沉浸模式只接受 0..2，越界一律当作关闭。 */
+    private static int clampImmersive(int raw) {
+        return raw >= 0 && raw <= StateKeys.IMMERSIVE_WALLPAPER ? raw : StateKeys.IMMERSIVE_OFF;
+    }
+
+    /**
+     * Decimal int parse. The shared {@link #parseInt} tries hex first (it is
+     * meant for colours); using it for a small enum would turn "10" into 16.
+     */
+    private static int parseDecimal(@Nullable String raw, int fallback) {
+        if (raw == null || raw.isEmpty()) {
+            return fallback;
+        }
+        try {
+            return Integer.parseInt(raw.trim());
+        } catch (Throwable t) {
+            return fallback;
+        }
     }
 
     private static float parseFloat(@Nullable String raw, float fallback) {
@@ -180,6 +211,8 @@ public final class LyricStyle {
         b.putString(StateKeys.STYLE_SHOW_NEXT, showNext ? "1" : "0");
         b.putString(StateKeys.STYLE_SHOW_PROGRESS, showProgress ? "1" : "0");
         b.putString(StateKeys.STYLE_PAUSE_KEEP, pauseKeep ? "1" : "0");
+        b.putString(StateKeys.STYLE_IMMERSIVE, String.valueOf(immersive));
+        b.putString(StateKeys.STYLE_LANDSCAPE, landscape ? "1" : "0");
         return b;
     }
 

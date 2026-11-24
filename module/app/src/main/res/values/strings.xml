@@ -200,6 +200,15 @@
     <string name="style_show_progress_summary">在歌词下方显示「当前 / 总时长」，取自系统媒体会话</string>
     <string name="style_pause_keep">暂停时保留歌词</string>
     <string name="style_pause_keep_summary">暂停时把当前歌词变暗保留，而不是直接消失</string>
+    <string name="style_immersive_section">息屏沉浸</string>
+    <string name="style_immersive">沉浸模式</string>
+    <string name="style_immersive_summary">播放音乐时息屏只显示歌词，隐藏时钟、日期、图片和通知；没有歌词时自动让出整屏</string>
+    <string name="style_immersive_off">关闭</string>
+    <string name="style_immersive_black">纯黑背景</string>
+    <string name="style_immersive_wallpaper">保留息屏壁纸</string>
+    <string name="style_immersive_hint">纯黑：整屏铺黑，最省电，换任何主题都生效；保留壁纸：只隐藏组件，背景仍是当前主题</string>
+    <string name="style_landscape">横屏歌词</string>
+    <string name="style_landscape_summary">设备横放时把歌词转 90°，竖屏息屏也能横着读；AOD 自身已横屏时自动不再旋转</string>
     <string name="style_preview_track">夜空中最亮的星 · 逃跑计划</string>
     <string name="style_preview_next">下一句歌词示例</string>
     <string name="style_preview_progress">1:23 / 4:05</string>
