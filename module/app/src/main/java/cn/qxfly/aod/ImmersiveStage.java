@@ -348,10 +348,52 @@ public final class ImmersiveStage {
         canvas.setPivotY(ch / 2f);
         canvas.setRotation(rot);
 
-        float ratio = sStyle == null ? 0.42f : sStyle.offsetRatio;
+        // 九宫格：行 = 垂直（上/中/下），列 = 水平（左/中/右）。
+        int grid = sStyle == null ? StateKeys.IMMERSIVE_GRID_DEFAULT : sStyle.immersiveGrid;
+        if (grid < StateKeys.IMMERSIVE_GRID_MIN || grid > StateKeys.IMMERSIVE_GRID_MAX) {
+            grid = StateKeys.IMMERSIVE_GRID_DEFAULT;
+        }
+        int col = grid % 3;
+        int row = grid / 3;
         float driftX = DRIFT[sDriftStep][0];
         float driftY = DRIFT[sDriftStep][1];
-        sBaseY = ch * ratio;
+
+        // 水平：用 gravity 而不是位移 —— 多行歌词才会整体贴着选中的那一侧，
+        // 位移只能搬动单行文本。applyStyle() 会先按 style.align 设一次，
+        // 这里在它之后覆盖（setStyle 的顺序是 applyStyle → sync → layout）。
+        int gravity = switch (col) {
+            case 0 -> Gravity.START;
+            case 2 -> Gravity.END;
+            default -> Gravity.CENTER_HORIZONTAL;
+        };
+        if (tv.getGravity() != gravity) {
+            tv.setGravity(gravity);
+        }
+        // 贴边时留 6% 的安全距离，避免文字顶到屏幕边缘。
+        int hInset = col == 1 ? 0 : Math.round(cw * 0.06f);
+        ViewGroup.LayoutParams rawLp = tv.getLayoutParams();
+        if (rawLp instanceof FrameLayout.LayoutParams) {
+            FrameLayout.LayoutParams tlp = (FrameLayout.LayoutParams) rawLp;
+            if (tlp.leftMargin != hInset || tlp.rightMargin != hInset) {
+                tlp.leftMargin = hInset;
+                tlp.rightMargin = hInset;
+                tv.setLayoutParams(tlp);
+            }
+        }
+        // 垂直：上下各留 10%，中间精确居中（用实测高度，测不到时按字号估算）。
+        int tvH = tv.getHeight();
+        if (tvH <= 0) {
+            tvH = tv.getMeasuredHeight();
+        }
+        if (tvH <= 0) {
+            tvH = Math.round(tv.getTextSize() * 1.4f);
+        }
+        float vInset = ch * 0.10f;
+        sBaseY = switch (row) {
+            case 0 -> vInset;
+            case 2 -> Math.max(vInset, ch - tvH - vInset);
+            default -> (ch - tvH) / 2f;
+        };
         tv.setTranslationX(driftX);
         tv.setTranslationY(sBaseY + driftY);
         if (tv.getWidth() != cw && tv.getLayoutParams() != null) {
@@ -360,11 +402,12 @@ public final class ImmersiveStage {
             tv.requestLayout();
         }
         // applyOffset 每秒会进来一两次，只有真的变了才打日志（AOD 上省电）。
-        int sig = (sw * 31 + sh) * 31 + rot;
+        int sig = ((sw * 31 + sh) * 31 + rot) * 31 + grid;
         if (sig != sLastLayoutSig) {
             sLastLayoutSig = sig;
             AodLyricModule.i("immersive layout " + sw + "x" + sh + " rot=" + rot
-                    + " canvas=" + cw + "x" + ch + " y=" + (int) (sBaseY + driftY));
+                    + " canvas=" + cw + "x" + ch + " grid=" + grid
+                    + " y=" + (int) (sBaseY + driftY));
         }
     }
 

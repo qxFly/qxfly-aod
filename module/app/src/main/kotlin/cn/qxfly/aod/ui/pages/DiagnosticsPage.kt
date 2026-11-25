@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -38,15 +37,13 @@ import cn.qxfly.aod.AodLyricModule
 import cn.qxfly.aod.LyricPublisher
 import cn.qxfly.aod.R
 import cn.qxfly.aod.StateKeys
+import cn.qxfly.aod.ui.base.BackButton
 import cn.qxfly.aod.ui.base.MiuixPage
 import cn.qxfly.aod.ui.core.LocalNavigator
 import kotlinx.coroutines.delay
 import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
-import top.yukonga.miuix.kmp.icon.MiuixIcons
-import top.yukonga.miuix.kmp.icon.extended.Back
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
@@ -308,22 +305,6 @@ private fun LogBlock(text: String?) {
             lineHeight = 14.sp,
             fontFamily = FontFamily.Monospace,
             color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-        )
-    }
-}
-
-@Composable
-private fun BackButton(onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .size(40.dp)
-            .clip(RoundedCornerShape(20.dp))
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(
-            imageVector = MiuixIcons.Back,
-            contentDescription = stringResource(R.string.cd_back),
         )
     }
 }

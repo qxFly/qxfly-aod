@@ -48,14 +48,20 @@ import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import cn.qxfly.aod.LyricStyle
 import cn.qxfly.aod.R
+import cn.qxfly.aod.ui.core.AnchorComponent
+import cn.qxfly.aod.ui.core.LocalNavigator
 import cn.qxfly.aod.ui.core.ModuleData
+import cn.qxfly.aod.ui.core.Route
 import kotlinx.coroutines.delay
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.Slider
 import top.yukonga.miuix.kmp.basic.Switch
 import top.yukonga.miuix.kmp.basic.TextButton
+import top.yukonga.miuix.kmp.icon.MiuixIcons
+import top.yukonga.miuix.kmp.icon.extended.ChevronForward
 import top.yukonga.miuix.kmp.preference.OverlayDropdownPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -101,6 +107,8 @@ data class StyleDraft(
     val immersive: Int = 0,
     /** true = 设备横放时把歌词转 90°。 */
     val landscape: Boolean = false,
+    /** 沉浸模式九宫格位置：0..8 行优先，4 = 居中。 */
+    val immersiveGrid: Int = 4,
 )
 
 internal fun LyricStyle.toDraft() = StyleDraft(
@@ -127,6 +135,7 @@ internal fun LyricStyle.toDraft() = StyleDraft(
     pauseKeep = pauseKeep,
     immersive = immersive,
     landscape = landscape,
+    immersiveGrid = immersiveGrid,
 )
 
 internal fun StyleDraft.toLyricStyle() = LyricStyle().apply {
@@ -153,6 +162,7 @@ internal fun StyleDraft.toLyricStyle() = LyricStyle().apply {
     pauseKeep = this@toLyricStyle.pauseKeep
     immersive = this@toLyricStyle.immersive
     landscape = this@toLyricStyle.landscape
+    immersiveGrid = this@toLyricStyle.immersiveGrid
 }
 
 /** 粗粒度锚点（与 Hook 侧 ANCHOR_* 一致）：大时钟 / 图片 / 时间日期组件 / 通知。 */
@@ -182,63 +192,231 @@ private fun canonicalAnchorValue(id: String?): String? {
 }
 
 /**
- * 歌词外观卡片（显示在歌词页）：字号 / 描边 / 颜色 / 字体 / 对齐 /
- * 锚点定位（4 个粗粒度区域）+ 所见即所得预览。
+ * 外观草稿的进程级存放点。
+ *
+ * 主页和 4 个二级页共用同一份草稿，只有「保存并应用」才写入 Provider；
+ * 二级页来回切换不会丢改动。进程重建后从 Provider 重新读取一次。
+ */
+internal object StyleDraftStore {
+    var draft by mutableStateOf(StyleDraft())
+
+    /** 最近一次操作提示；空串表示不显示。 */
+    var status by mutableStateOf("")
+        private set
+
+    /**
+     * 提示序号：每次 [show] 都递增。
+     *
+     * 计时不能用 [status] 本身做 key——连点同一个按钮时文案没变，key 不变，
+     * 协程不会重启，提示会在上一次的 2 秒到点时提前消失。
+     */
+    var statusSeq by mutableStateOf(0)
+        private set
+
+    private var loaded = false
+
+    /** 显示一条提示并重新开始计时。 */
+    fun show(text: String) {
+        status = text
+        statusSeq++
+    }
+
+    fun clearStatus() {
+        status = ""
+    }
+
+    fun ensureLoaded(data: ModuleData) {
+        if (!loaded) {
+            draft = data.currentStyle().toDraft()
+            loaded = true
+        }
+    }
+}
+
+/**
+ * 外观主页第一张卡片：所见即所得预览 + 样式预设。
+ *
+ * 只放「看效果」和「一键换风格」——所有细项都收进下面的分类二级页，
+ * 避免一个页面堆三十多个控件。
  */
 @Composable
-internal fun StyleEditorCard(data: ModuleData) {
-    var draft by remember { mutableStateOf(data.currentStyle().toDraft()) }
-    var statusLine by remember { mutableStateOf("") }
-    var showColorPicker by remember { mutableStateOf(false) }
-    var showStrokeColorPicker by remember { mutableStateOf(false) }
-    var showBgColorPicker by remember { mutableStateOf(false) }
-    val components by data.components.collectAsStateWithLifecycle()
-
-    // 自定义字体：文件由系统文件选择器（SAF）导入到应用私有目录，
-    // Hook 进程经 Provider 读取；这里只记录展示用的原始文件名。
+internal fun StylePreviewCard(data: ModuleData) {
+    StyleDraftStore.ensureLoaded(data)
+    val draft = StyleDraftStore.draft
     val context = LocalContext.current
-    var customFontLabel by remember { mutableStateOf(readCustomFontLabel(context)) }
-    val fontImportFailedMsg = stringResource(R.string.font_custom_failed)
-    val fontPicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocument(),
-    ) { uri ->
-        if (uri != null) {
-            val name = importCustomFont(context, uri)
-            if (name != null) {
-                customFontLabel = name
-                draft = draft.copy(typefaceName = "custom")
-                statusLine = name
-            } else {
-                statusLine = fontImportFailedMsg
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        insideMargin = PaddingValues(16.dp),
+    ) {
+        StylePreview(draft)
+        Spacer(Modifier.height(12.dp))
+
+        Text(
+            text = stringResource(R.string.style_presets),
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+        )
+        Spacer(Modifier.height(6.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PresetChip(stringResource(R.string.style_preset_minimal)) {
+                StyleDraftStore.draft = applyPreset(StyleDraftStore.draft, Preset.MINIMAL)
+                StyleDraftStore.show(
+                    context.getString(
+                        R.string.style_preset_saved,
+                        context.getString(R.string.style_preset_minimal),
+                    ),
+                )
+            }
+            PresetChip(stringResource(R.string.style_preset_bold)) {
+                StyleDraftStore.draft = applyPreset(StyleDraftStore.draft, Preset.BOLD)
+                StyleDraftStore.show(
+                    context.getString(
+                        R.string.style_preset_saved,
+                        context.getString(R.string.style_preset_bold),
+                    ),
+                )
+            }
+            PresetChip(stringResource(R.string.style_preset_pill)) {
+                StyleDraftStore.draft = applyPreset(StyleDraftStore.draft, Preset.PILL)
+                StyleDraftStore.show(
+                    context.getString(
+                        R.string.style_preset_saved,
+                        context.getString(R.string.style_preset_pill),
+                    ),
+                )
             }
         }
     }
+}
 
-    // 提示自动消失：旧实现把「已保存」永久留在界面上，行高变化还会把按钮
-    // 挤走，第二次点击因此落空。现在 2 秒后清空，并用固定高度占位。
-    LaunchedEffect(statusLine) {
-        if (statusLine.isNotEmpty()) {
+/**
+ * 4 个功能分类的入口卡：主页只显示「当前值摘要」，点进去才是二级页。
+ *
+ * 分组原则：按用户调节时的目的分，而不是按控件类型分——
+ * 文字外观 / 放在哪里 / 额外显示什么 / 息屏沉浸。
+ */
+@Composable
+internal fun StyleGroupsCard(data: ModuleData) {
+    val navigator = LocalNavigator.current
+    val draft = StyleDraftStore.draft
+    val components by data.components.collectAsStateWithLifecycle()
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        insideMargin = PaddingValues(0.dp),
+    ) {
+        GroupRow(
+            title = stringResource(R.string.style_group_text),
+            summary = textStyleSummary(draft),
+        ) { navigator.push(Route.StyleText) }
+        GroupDivider()
+        GroupRow(
+            title = stringResource(R.string.style_group_layout),
+            summary = layoutSummary(draft, components),
+        ) { navigator.push(Route.StyleLayout) }
+        GroupDivider()
+        GroupRow(
+            title = stringResource(R.string.style_group_extra),
+            summary = extraSummary(draft),
+        ) { navigator.push(Route.StyleExtra) }
+        GroupDivider()
+        GroupRow(
+            title = stringResource(R.string.style_group_immersive),
+            summary = immersiveSummary(draft),
+        ) { navigator.push(Route.StyleImmersive) }
+    }
+}
+
+/**
+ * 保存卡：主页和每个二级页都有同一份，改完就地保存，不用退回主页。
+ *
+ * 提示条用固定高度占位：文字出现/消失都不会改变按钮位置（按钮不再乱跳，
+ * 连续点击也不会因为行高变化而点空）。
+ */
+@Composable
+internal fun StyleSaveCard(data: ModuleData) {
+    val savedMsg = stringResource(R.string.style_saved)
+    val resetMsg = stringResource(R.string.style_reset_done)
+
+    LaunchedEffect(StyleDraftStore.statusSeq) {
+        if (StyleDraftStore.status.isNotEmpty()) {
             delay(2000)
-            statusLine = ""
+            StyleDraftStore.clearStatus()
         }
     }
 
-    // ---- 配置导入 / 导出（SAF，不需要存储权限）----
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        insideMargin = PaddingValues(16.dp),
+    ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            TextButton(
+                text = stringResource(R.string.style_save),
+                onClick = {
+                    data.save(StyleDraftStore.draft.toLyricStyle())
+                    StyleDraftStore.show(savedMsg)
+                },
+                modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.textButtonColorsPrimary(),
+            )
+            TextButton(
+                text = stringResource(R.string.style_reset),
+                onClick = {
+                    StyleDraftStore.draft = StyleDraft()
+                    StyleDraftStore.show(resetMsg)
+                },
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(20.dp)
+                .padding(top = 4.dp),
+        ) {
+            if (StyleDraftStore.status.isNotEmpty()) {
+                Text(
+                    text = StyleDraftStore.status,
+                    fontSize = 12.sp,
+                    color = MiuixTheme.colorScheme.primary,
+                )
+            }
+        }
+    }
+}
+
+/** 配置导入 / 导出卡（SAF，不需要存储权限）。 */
+@Composable
+internal fun StyleBackupCard() {
+    val context = LocalContext.current
     val exportFailedMsg = stringResource(R.string.style_import_fail)
+
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/json"),
     ) { uri ->
         if (uri != null) {
             val ok = runCatching {
                 context.contentResolver.openOutputStream(uri)?.use { out ->
-                    out.write(draft.toJson().toByteArray(Charsets.UTF_8))
+                    out.write(StyleDraftStore.draft.toJson().toByteArray(Charsets.UTF_8))
                 } != null
             }.getOrDefault(false)
-            statusLine = if (ok) {
-                context.getString(R.string.style_export_ok, uri.lastPathSegment ?: "JSON")
-            } else {
-                exportFailedMsg
-            }
+            StyleDraftStore.show(
+                if (ok) {
+                    context.getString(R.string.style_export_ok, uri.lastPathSegment ?: "JSON")
+                } else {
+                    exportFailedMsg
+                },
+            )
         }
     }
     val importLauncher = rememberLauncherForActivityResult(
@@ -251,10 +429,10 @@ internal fun StyleEditorCard(data: ModuleData) {
             }.getOrNull()
             val imported = text?.let { draftFromJson(it) }
             if (imported != null) {
-                draft = imported
-                statusLine = context.getString(R.string.style_import_ok)
+                StyleDraftStore.draft = imported
+                StyleDraftStore.show(context.getString(R.string.style_import_ok))
             } else {
-                statusLine = context.getString(R.string.style_import_fail)
+                StyleDraftStore.show(context.getString(R.string.style_import_fail))
             }
         }
     }
@@ -262,372 +440,20 @@ internal fun StyleEditorCard(data: ModuleData) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp),
+            .padding(horizontal = 12.dp, vertical = 4.dp),
         insideMargin = PaddingValues(16.dp),
     ) {
         Text(
-            text = stringResource(R.string.style_current_summary, draft.textSizeSp, draft.offsetRatio),
-            fontSize = 12.sp,
-            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-        )
-        Spacer(Modifier.height(10.dp))
-
-        StylePreview(draft)
-        Spacer(Modifier.height(12.dp))
-
-        Text(
-            text = stringResource(R.string.style_presets),
+            text = stringResource(R.string.style_backup),
             fontSize = 13.sp,
             fontWeight = FontWeight.Medium,
         )
-        Spacer(Modifier.height(6.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            PresetChip(stringResource(R.string.style_preset_minimal)) {
-                draft = applyPreset(draft, Preset.MINIMAL)
-                statusLine = context.getString(R.string.style_preset_saved,
-                        context.getString(R.string.style_preset_minimal))
-            }
-            PresetChip(stringResource(R.string.style_preset_bold)) {
-                draft = applyPreset(draft, Preset.BOLD)
-                statusLine = context.getString(R.string.style_preset_saved,
-                        context.getString(R.string.style_preset_bold))
-            }
-            PresetChip(stringResource(R.string.style_preset_pill)) {
-                draft = applyPreset(draft, Preset.PILL)
-                statusLine = context.getString(R.string.style_preset_saved,
-                        context.getString(R.string.style_preset_pill))
-            }
-        }
-        Spacer(Modifier.height(12.dp))
-
-        SliderRow(
-            label = stringResource(R.string.style_text_size),
-            value = draft.textSizeSp,
-            range = 12f..40f,
-            defaultValue = 20f,
-            format = { "${it.toInt()}" },
-            onChange = { draft = draft.copy(textSizeSp = it) },
-        )
-        SliderRow(
-            label = stringResource(R.string.style_stroke_width),
-            value = draft.strokeWidth,
-            range = 0f..6f,
-            defaultValue = 0f,
-            onChange = { draft = draft.copy(strokeWidth = it) },
-        )
-        if (draft.strokeWidth > 0.5f) {
-            Text(
-                text = stringResource(R.string.style_stroke_color),
-                fontSize = 13.sp,
-                modifier = Modifier.padding(top = 2.dp, bottom = 4.dp),
-            )
-            ColorSwatches(
-                selected = draft.strokeColor,
-                onPick = { draft = draft.copy(strokeColor = it) },
-                onCustom = { showStrokeColorPicker = true },
-            )
-        }
-
-        val anchored = !draft.anchorId.isNullOrEmpty()
-        if (!anchored) {
-            SliderRow(
-                label = stringResource(R.string.style_offset),
-                value = draft.offsetRatio,
-                range = 0f..0.9f,
-                defaultValue = 0.42f,
-                onChange = { draft = draft.copy(offsetRatio = it) },
-            )
-        }
-
-        Spacer(Modifier.height(10.dp))
-        OverlayDropdownPreference(
-            title = stringResource(R.string.style_align),
-            items = listOf(
-                stringResource(R.string.style_align_center),
-                stringResource(R.string.style_align_left),
-                stringResource(R.string.style_align_right),
-            ),
-            selectedIndex = draft.align.coerceIn(0, 2),
-            onSelectedIndexChange = { index ->
-                draft = draft.copy(align = index)
-            },
-        )
-
-        Spacer(Modifier.height(10.dp))
-        Text(stringResource(R.string.style_anchor_section), fontSize = 13.sp, fontWeight = FontWeight.Medium)
-        Spacer(Modifier.height(6.dp))
-        SwitchPreference(
-            title = stringResource(R.string.style_anchor_mode),
-            summary = stringResource(R.string.style_anchor_mode_summary),
-            checked = anchored,
-            enabled = components.isNotEmpty() || anchored,
-            onCheckedChange = { enabled ->
-                draft = draft.copy(
-                    anchorId = if (enabled) {
-                        components.firstOrNull()?.id ?: draft.anchorId
-                    } else {
-                        null
-                    },
-                )
-            },
-        )
-        if (anchored) {
-            if (components.isEmpty()) {
-                Text(
-                    text = stringResource(R.string.style_anchor_empty),
-                    fontSize = 12.sp,
-                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                    modifier = Modifier.padding(vertical = 4.dp),
-                )
-            } else {
-                OverlayDropdownPreference(
-                    title = stringResource(R.string.style_anchor_component),
-                    items = components.map { it.label },
-                    selectedIndex = components.indexOfFirst {
-                        it.id == draft.anchorId || coarseAnchorId(draft.anchorId) == it.id
-                    }.coerceAtLeast(0),
-                    onSelectedIndexChange = { index ->
-                        draft = draft.copy(anchorId = components[index].id)
-                    },
-                )
-                OverlayDropdownPreference(
-                    title = stringResource(R.string.style_anchor_position),
-                    items = listOf(
-                        stringResource(R.string.style_anchor_above),
-                        stringResource(R.string.style_anchor_below),
-                    ),
-                    selectedIndex = if (draft.anchorPos == 0) 0 else 1,
-                    onSelectedIndexChange = { index ->
-                        draft = draft.copy(anchorPos = index)
-                    },
-                )
-                SliderRow(
-                    label = stringResource(R.string.style_anchor_gap),
-                    value = draft.anchorGap,
-                    range = 0f..80f,
-                    defaultValue = 12f,
-                    format = { "${it.toInt()}" },
-                    onChange = { draft = draft.copy(anchorGap = it) },
-                )
-                SwitchPreference(
-                    title = stringResource(R.string.style_tree_insert),
-                    summary = stringResource(R.string.style_tree_insert_summary),
-                    checked = draft.treeInsert,
-                    onCheckedChange = { enabled ->
-                        draft = draft.copy(treeInsert = enabled)
-                    },
-                )
-            }
-        }
-
-        Spacer(Modifier.height(10.dp))
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(stringResource(R.string.style_bg), fontSize = 13.sp)
-                Text(
-                    text = stringResource(R.string.style_bg_summary),
-                    fontSize = 11.sp,
-                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                )
-            }
-            Switch(
-                checked = draft.bgEnabled,
-                onCheckedChange = { v -> draft = draft.copy(bgEnabled = v) },
-            )
-        }
-        if (draft.bgEnabled) {
-            Text(
-                text = stringResource(R.string.style_bg_color),
-                fontSize = 13.sp,
-                modifier = Modifier.padding(top = 2.dp, bottom = 4.dp),
-            )
-            ColorSwatches(
-                selected = draft.bgColor,
-                onPick = { draft = draft.copy(bgColor = it) },
-                onCustom = { showBgColorPicker = true },
-            )
-            SliderRow(
-                label = stringResource(R.string.style_bg_alpha),
-                value = draft.bgAlpha,
-                range = 0f..1f,
-                defaultValue = 0.45f,
-                format = { "${(it * 100).toInt()}%" },
-                toInput = { Math.round(it * 100).toString() },
-                fromInput = { it.trim().removeSuffix("%").trim().toFloatOrNull()?.div(100f) },
-                onChange = { draft = draft.copy(bgAlpha = it) },
-            )
-            SliderRow(
-                label = stringResource(R.string.style_bg_radius),
-                value = draft.bgRadiusDp,
-                range = 0f..40f,
-                defaultValue = 24f,
-                format = { "${it.toInt()} dp" },
-                toInput = { it.toInt().toString() },
-                fromInput = { it.trim().removeSuffix("dp").trim().toFloatOrNull() },
-                onChange = { draft = draft.copy(bgRadiusDp = it) },
-            )
-        }
-
-        Spacer(Modifier.height(10.dp))
-        Text(stringResource(R.string.style_color), fontSize = 13.sp)
-        ColorSwatches(
-            selected = draft.textColor,
-            onPick = { draft = draft.copy(textColor = it) },
-            onCustom = { showColorPicker = true },
-        )
-
-        Spacer(Modifier.height(10.dp))
-        Text(stringResource(R.string.style_typeface), fontSize = 13.sp)
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(top = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            StyleFonts.forEach { (labelRes, value) ->
-                SelectableChip(
-                    label = stringResource(labelRes),
-                    selected = draft.typefaceName == value,
-                    modifier = Modifier.weight(1f),
-                    onClick = { draft = draft.copy(typefaceName = value) },
-                )
-            }
-            SelectableChip(
-                label = stringResource(R.string.font_custom),
-                selected = draft.typefaceName == "custom",
-                modifier = Modifier.weight(1f),
-                onClick = { draft = draft.copy(typefaceName = "custom") },
-            )
-        }
-        if (draft.typefaceName == "custom") {
-            Spacer(Modifier.height(8.dp))
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        text = customFontLabel.ifEmpty {
-                            stringResource(R.string.font_custom_none)
-                        },
-                        fontSize = 12.sp,
-                    )
-                    Text(
-                        text = stringResource(R.string.font_custom_hint),
-                        fontSize = 11.sp,
-                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                    )
-                }
-                TextButton(
-                    text = stringResource(R.string.font_custom_import),
-                    onClick = { fontPicker.launch(FONT_MIME_TYPES) },
-                )
-            }
-        }
-
-        Spacer(Modifier.height(10.dp))
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(stringResource(R.string.style_bold), Modifier.weight(1f), fontSize = 13.sp)
-            Switch(
-                checked = draft.weight == 0,
-                onCheckedChange = { bold -> draft = draft.copy(weight = if (bold) 0 else 1) },
-            )
-        }
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(stringResource(R.string.style_show_translation), fontSize = 13.sp)
-                Text(
-                    text = stringResource(R.string.style_show_translation_summary),
-                    fontSize = 11.sp,
-                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                )
-            }
-            Switch(
-                checked = draft.showTranslation,
-                onCheckedChange = { v -> draft = draft.copy(showTranslation = v) },
-            )
-        }
-
-        Spacer(Modifier.height(12.dp))
         Text(
-            text = stringResource(R.string.style_extra_section),
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Medium,
-        )
-        LabeledSwitchRow(
-            title = stringResource(R.string.style_show_track),
-            summary = stringResource(R.string.style_show_track_summary),
-            checked = draft.showTrack,
-            onChange = { v -> draft = draft.copy(showTrack = v) },
-        )
-        LabeledSwitchRow(
-            title = stringResource(R.string.style_show_next),
-            summary = stringResource(R.string.style_show_next_summary),
-            checked = draft.showNext,
-            onChange = { v -> draft = draft.copy(showNext = v) },
-        )
-        LabeledSwitchRow(
-            title = stringResource(R.string.style_show_progress),
-            summary = stringResource(R.string.style_show_progress_summary),
-            checked = draft.showProgress,
-            onChange = { v -> draft = draft.copy(showProgress = v) },
-        )
-        LabeledSwitchRow(
-            title = stringResource(R.string.style_pause_keep),
-            summary = stringResource(R.string.style_pause_keep_summary),
-            checked = draft.pauseKeep,
-            onChange = { v -> draft = draft.copy(pauseKeep = v) },
-        )
-
-        Spacer(Modifier.height(12.dp))
-        Text(
-            text = stringResource(R.string.style_immersive_section),
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Medium,
-        )
-        OverlayDropdownPreference(
-            title = stringResource(R.string.style_immersive),
-            items = listOf(
-                stringResource(R.string.style_immersive_off),
-                stringResource(R.string.style_immersive_black),
-                stringResource(R.string.style_immersive_wallpaper),
-            ),
-            selectedIndex = draft.immersive.coerceIn(0, 2),
-            onSelectedIndexChange = { index ->
-                draft = draft.copy(immersive = index)
-            },
-        )
-        Text(
-            text = stringResource(R.string.style_immersive_summary),
+            text = stringResource(R.string.style_backup_summary),
             fontSize = 11.sp,
             color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            modifier = Modifier.padding(top = 2.dp),
         )
-        Text(
-            text = stringResource(R.string.style_immersive_hint),
-            fontSize = 11.sp,
-            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-        )
-        LabeledSwitchRow(
-            title = stringResource(R.string.style_landscape),
-            summary = stringResource(R.string.style_landscape_summary),
-            checked = draft.landscape,
-            onChange = { v -> draft = draft.copy(landscape = v) },
-        )
-
         Spacer(Modifier.height(10.dp))
         Row(
             Modifier.fillMaxWidth(),
@@ -644,84 +470,157 @@ internal fun StyleEditorCard(data: ModuleData) {
                 modifier = Modifier.weight(1f),
             )
         }
+    }
+}
 
-        Spacer(Modifier.height(12.dp))
-        val savedMsg = stringResource(R.string.style_saved)
-        val resetMsg = stringResource(R.string.style_reset_done)
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            TextButton(
-                text = stringResource(R.string.style_save),
-                onClick = {
-                    data.save(draft.toLyricStyle())
-                    statusLine = savedMsg
-                },
-                modifier = Modifier.weight(1f),
-                colors = ButtonDefaults.textButtonColorsPrimary(),
-            )
-            TextButton(
-                text = stringResource(R.string.style_reset),
-                onClick = {
-                    draft = StyleDraft()
-                    statusLine = resetMsg
-                },
-                modifier = Modifier.weight(1f),
+/** 二级页入口行：标题 + 当前值摘要 + 右箭头。 */
+@Composable
+private fun GroupRow(
+    title: String,
+    summary: String,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 13.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, fontSize = 15.sp)
+            Text(
+                text = summary,
+                fontSize = 12.sp,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
             )
         }
-        // 固定高度占位：提示出现/消失都不会改变按钮位置，避免第二次点击落空。
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .height(20.dp)
-                .padding(top = 4.dp),
-        ) {
-            if (statusLine.isNotEmpty()) {
-                Text(
-                    text = statusLine,
-                    fontSize = 12.sp,
-                    color = MiuixTheme.colorScheme.primary,
-                )
-            }
-        }
-    }
-
-    if (showColorPicker) {
-        ColorPickerDialog(
-            initial = draft.textColor,
-            onDismiss = { showColorPicker = false },
-            onConfirm = { argb ->
-                draft = draft.copy(textColor = argb)
-                showColorPicker = false
-            },
-        )
-    }
-    if (showStrokeColorPicker) {
-        ColorPickerDialog(
-            initial = draft.strokeColor,
-            onDismiss = { showStrokeColorPicker = false },
-            onConfirm = { argb ->
-                draft = draft.copy(strokeColor = argb)
-                showStrokeColorPicker = false
-            },
-        )
-    }
-    if (showBgColorPicker) {
-        ColorPickerDialog(
-            initial = draft.bgColor,
-            onDismiss = { showBgColorPicker = false },
-            onConfirm = { argb ->
-                draft = draft.copy(bgColor = argb)
-                showBgColorPicker = false
-            },
+        Icon(
+            imageVector = MiuixIcons.ChevronForward,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
         )
     }
 }
 
+/** 卡片内的分组分隔线：左侧留 16dp，与标题对齐。 */
+@Composable
+private fun GroupDivider() {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp)
+            .height(1.dp)
+            .background(MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.12f)),
+    )
+}
+
+/** 文字样式摘要：字号 · 字体 · 颜色。 */
+@Composable
+private fun textStyleSummary(d: StyleDraft): String {
+    val font = when (d.typefaceName) {
+        "sans-serif" -> stringResource(R.string.font_sans)
+        "serif" -> stringResource(R.string.font_serif)
+        "monospace" -> stringResource(R.string.font_mono)
+        "custom" -> stringResource(R.string.font_custom)
+        else -> stringResource(R.string.font_system)
+    }
+    val color = "#" + String.format(java.util.Locale.US, "%06X", d.textColor and 0xFFFFFF)
+    return stringResource(R.string.style_group_text_value, d.textSizeSp.toInt(), font, color)
+}
+
+/** 位置摘要：沉浸模式下由九宫格决定，否则是「对齐 + 垂直百分比」或锚点组件。 */
+@Composable
+private fun layoutSummary(d: StyleDraft, components: List<AnchorComponent>): String {
+    if (d.immersive != 0) {
+        return stringResource(R.string.style_group_layout_immersive, gridLabel(d.immersiveGrid))
+    }
+    val anchor = d.anchorId
+    if (!anchor.isNullOrEmpty()) {
+        val label = components
+            .firstOrNull { it.id == anchor || coarseAnchorId(anchor) == it.id }
+            ?.label ?: coarseAnchorName(anchor)
+        return stringResource(R.string.style_group_layout_anchor, label)
+    }
+    return stringResource(
+        R.string.style_group_layout_value,
+        alignLabel(d.align),
+        (d.offsetRatio * 100).toInt(),
+    )
+}
+
+/** 粗粒度锚点的可读名：组件清单里没有对应项时兜底，避免摘要显示裸 id。 */
+@Composable
+private fun coarseAnchorName(id: String): String = when (val coarse = coarseAnchorId(id) ?: id) {
+    "clock" -> stringResource(R.string.style_anchor_name_clock)
+    "image" -> stringResource(R.string.style_anchor_name_image)
+    "timedate" -> stringResource(R.string.style_anchor_name_timedate)
+    "notify" -> stringResource(R.string.style_anchor_name_notify)
+    else -> coarse
+}
+
+/** 附加信息摘要：背景开关 + 已开启的附加项。 */
+@Composable
+private fun extraSummary(d: StyleDraft): String {
+    val parts = mutableListOf(
+        if (d.bgEnabled) {
+            stringResource(R.string.style_summary_bg_on)
+        } else {
+            stringResource(R.string.style_summary_bg_off)
+        },
+    )
+    if (d.showTrack) parts += stringResource(R.string.style_summary_track)
+    if (d.showNext) parts += stringResource(R.string.style_summary_next)
+    if (d.showProgress) parts += stringResource(R.string.style_summary_progress)
+    if (d.showTranslation) parts += stringResource(R.string.style_summary_translation)
+    if (!d.pauseKeep) parts += stringResource(R.string.style_summary_pause_off)
+    return parts.joinToString(" · ")
+}
+
+/** 沉浸摘要：关闭 / 模式 · 九宫格位置（· 横屏）。 */
+@Composable
+private fun immersiveSummary(d: StyleDraft): String {
+    val mode = when (d.immersive) {
+        1 -> stringResource(R.string.style_immersive_black)
+        2 -> stringResource(R.string.style_immersive_wallpaper)
+        else -> return stringResource(R.string.style_immersive_off)
+    }
+    return if (d.landscape) {
+        stringResource(R.string.style_group_immersive_value_landscape, mode, gridLabel(d.immersiveGrid))
+    } else {
+        stringResource(R.string.style_group_immersive_value, mode, gridLabel(d.immersiveGrid))
+    }
+}
+
+/** 对齐方式的短名（摘要用，避免「居中（与组件一致）」撑长一行）。 */
+@Composable
+internal fun alignLabel(align: Int): String = stringResource(
+    when (align) {
+        1 -> R.string.style_align_left
+        2 -> R.string.style_align_right
+        else -> R.string.style_align_short_center
+    },
+)
+
+/** 九宫格位置名：0 左上 … 4 居中 … 8 右下。 */
+@Composable
+internal fun gridLabel(index: Int): String = stringResource(
+    when (index.coerceIn(0, 8)) {
+        0 -> R.string.style_grid_pos_0
+        1 -> R.string.style_grid_pos_1
+        2 -> R.string.style_grid_pos_2
+        3 -> R.string.style_grid_pos_3
+        4 -> R.string.style_grid_pos_4
+        5 -> R.string.style_grid_pos_5
+        6 -> R.string.style_grid_pos_6
+        7 -> R.string.style_grid_pos_7
+        else -> R.string.style_grid_pos_8
+    },
+)
+
 /** 标题 + 说明 + 右侧开关，用于附加信息里的 4 个选项。 */
 @Composable
-private fun LabeledSwitchRow(
+internal fun LabeledSwitchRow(
     title: String,
     summary: String,
     checked: Boolean,
@@ -815,6 +714,7 @@ private fun StyleDraft.toJson(): String = org.json.JSONObject().apply {
     put("pauseKeep", pauseKeep)
     put("immersive", immersive)
     put("landscape", landscape)
+    put("immersiveGrid", immersiveGrid)
 }.toString(2)
 
 private fun draftFromJson(raw: String): StyleDraft? = runCatching {
@@ -846,12 +746,13 @@ private fun draftFromJson(raw: String): StyleDraft? = runCatching {
         pauseKeep = o.optBoolean("pauseKeep", true),
         immersive = o.optInt("immersive", 0),
         landscape = o.optBoolean("landscape", false),
+        immersiveGrid = o.optInt("immersiveGrid", 4).coerceIn(0, 8),
     )
 }.getOrNull()
 
 /** 选中态明确的文字按钮：字体等选项点击后必须有可见反馈。 */
 @Composable
-private fun SelectableChip(
+internal fun SelectableChip(
     label: String,
     selected: Boolean,
     modifier: Modifier = Modifier,
@@ -1018,7 +919,7 @@ private fun StylePreview(draft: StyleDraft) {
  * 确定后写回目标颜色（文字色或描边色）。
  */
 @Composable
-private fun ColorPickerDialog(initial: Int, onDismiss: () -> Unit, onConfirm: (Int) -> Unit) {
+internal fun ColorPickerDialog(initial: Int, onDismiss: () -> Unit, onConfirm: (Int) -> Unit) {
     val start = remember(initial) {
         FloatArray(3).also { android.graphics.Color.colorToHSV(initial, it) }
     }
@@ -1103,7 +1004,7 @@ private fun ColorPickerDialog(initial: Int, onDismiss: () -> Unit, onConfirm: (I
 
 /** 调色板行：预置色 + 自定义入口（带选中描边）。 */
 @Composable
-private fun ColorSwatches(selected: Int, onPick: (Int) -> Unit, onCustom: () -> Unit) {
+internal fun ColorSwatches(selected: Int, onPick: (Int) -> Unit, onCustom: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -1159,7 +1060,7 @@ private fun Swatch(
 
 /** slider 行：左侧标签 + 可点击输入的当前值，下面滑条。 */
 @Composable
-private fun SliderRow(
+internal fun SliderRow(
     label: String,
     value: Float,
     range: ClosedFloatingPointRange<Float>,
@@ -1331,7 +1232,7 @@ private fun trimNumber(v: Float): String =
     }
 
 /** 外观可选颜色（ARGB），与旧界面一致。 */
-private val StyleColors = listOf(
+internal val StyleColors = listOf(
     0xFFFFFFFF.toInt(),
     0xFF7D9BFF.toInt(),
     0xFF6DD58C.toInt(),
@@ -1341,7 +1242,7 @@ private val StyleColors = listOf(
 )
 
 /** 字体族选项：显示名资源 → typeface 名（null = 系统默认）。 */
-private val StyleFonts = listOf(
+internal val StyleFonts = listOf(
     R.string.font_system to null,
     R.string.font_sans to "sans-serif",
     R.string.font_serif to "serif",
@@ -1349,7 +1250,7 @@ private val StyleFonts = listOf(
 )
 
 /** 自定义字体选择器接受的 MIME（部分文件管理器把 ttf 标成 octet-stream）。 */
-private val FONT_MIME_TYPES = arrayOf(
+internal val FONT_MIME_TYPES = arrayOf(
     "font/*",
     "application/x-font-ttf",
     "application/x-font-otf",

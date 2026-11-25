@@ -35,6 +35,24 @@ sealed interface Route : NavKey {
     /** 诊断页（从设置页压栈进入）。 */
     @Serializable
     data object Diagnostics : Route
+
+    // ---- 外观页的二级页（从外观页压栈进入）----
+
+    /** 文字样式：字号 / 字体 / 颜色 / 描边 / 翻译。 */
+    @Serializable
+    data object StyleText : Route
+
+    /** 位置与对齐：对齐方式 / 垂直位置 / 组件锚点。 */
+    @Serializable
+    data object StyleLayout : Route
+
+    /** 背景与附加信息：背景板 / 歌名 / 下一句 / 进度。 */
+    @Serializable
+    data object StyleExtra : Route
+
+    /** 息屏沉浸：模式 / 九宫格定位 / 横屏。 */
+    @Serializable
+    data object StyleImmersive : Route
 }
 
 /** 标签根路由（与底部导航一一对应）。 */

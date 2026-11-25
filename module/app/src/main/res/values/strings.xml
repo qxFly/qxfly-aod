@@ -82,7 +82,7 @@
     <string name="home_link_res_summary">SuperLyric 歌词服务与配置说明</string>
 
     <!-- 外观页 -->
-    <string name="style_page_subtitle">字号、颜色、字体与定位</string>
+    <string name="style_page_subtitle">预览、分类设置与保存</string>
 
     <!-- 设置页 -->
     <string name="settings_subtitle">App 界面主题</string>
@@ -209,6 +209,53 @@
     <string name="style_immersive_hint">纯黑：整屏铺黑，最省电，换任何主题都生效；保留壁纸：只隐藏组件，背景仍是当前主题</string>
     <string name="style_landscape">横屏歌词</string>
     <string name="style_landscape_summary">设备横放时把歌词转 90°，竖屏息屏也能横着读；AOD 自身已横屏时自动不再旋转</string>
+
+    <!-- 外观页分组与二级页 -->
+    <string name="style_group_text">文字样式</string>
+    <string name="style_group_text_summary">字号、字体、颜色、描边与翻译</string>
+    <string name="style_group_text_value">%1$d sp · %2$s · %3$s</string>
+    <string name="style_group_layout">位置与对齐</string>
+    <string name="style_group_layout_summary">对齐方式、垂直位置与组件锚点</string>
+    <string name="style_group_layout_value">%1$s · 垂直 %2$d%%</string>
+    <string name="style_group_layout_anchor">跟随「%1$s」</string>
+    <string name="style_group_layout_immersive">沉浸九宫格：%1$s</string>
+    <string name="style_group_extra">背景与附加信息</string>
+    <string name="style_group_extra_summary">背景板、歌名、下一句、进度与翻译</string>
+    <string name="style_group_immersive">息屏沉浸</string>
+    <string name="style_group_immersive_summary">播放时只留歌词：九宫格定位与横屏</string>
+    <string name="style_group_immersive_value">%1$s · %2$s</string>
+    <string name="style_group_immersive_value_landscape">%1$s · %2$s · 横屏</string>
+    <string name="style_summary_bg_on">背景开</string>
+    <string name="style_summary_bg_off">背景关</string>
+    <string name="style_summary_pause_off">暂停即隐藏</string>
+    <string name="style_summary_track">歌名</string>
+    <string name="style_summary_next">下一句</string>
+    <string name="style_summary_progress">进度</string>
+    <string name="style_summary_translation">翻译</string>
+    <string name="style_anchor_name_clock">大时钟</string>
+    <string name="style_anchor_name_image">图片</string>
+    <string name="style_anchor_name_timedate">时间日期</string>
+    <string name="style_anchor_name_notify">通知</string>
+    <string name="style_align_short_center">居中</string>
+    <string name="style_backup">配置备份</string>
+    <string name="style_backup_summary">导出当前草稿为 JSON，或从 JSON 导入</string>
+
+    <!-- 沉浸九宫格 -->
+    <string name="style_grid_title">位置（九宫格）</string>
+    <string name="style_grid_hint">水平居左/居中/居右，垂直居上/居中/居下，共 9 档</string>
+    <string name="style_grid_current">当前：%1$s</string>
+    <string name="style_grid_pos_0">左上</string>
+    <string name="style_grid_pos_1">中上</string>
+    <string name="style_grid_pos_2">右上</string>
+    <string name="style_grid_pos_3">左中</string>
+    <string name="style_grid_pos_4">居中</string>
+    <string name="style_grid_pos_5">右中</string>
+    <string name="style_grid_pos_6">左下</string>
+    <string name="style_grid_pos_7">中下</string>
+    <string name="style_grid_pos_8">右下</string>
+    <string name="style_immersive_grid_off">九宫格定位只在沉浸模式开启时生效</string>
+    <string name="style_layout_immersive_hint">沉浸模式下位置由「位置（九宫格）」独占控制，这里的对齐与锚点不生效</string>
+    <string name="style_layout_go_grid">去设置九宫格</string>
     <string name="style_preview_track">夜空中最亮的星 · 逃跑计划</string>
     <string name="style_preview_next">下一句歌词示例</string>
     <string name="style_preview_progress">1:23 / 4:05</string>

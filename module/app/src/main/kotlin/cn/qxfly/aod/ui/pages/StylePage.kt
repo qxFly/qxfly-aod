@@ -1,6 +1,5 @@
 package cn.qxfly.aod.ui.pages
 
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
@@ -17,7 +16,10 @@ import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 
 /**
- * 外观页：总开关 + 息屏歌词外观编辑（从原主页拆出来，主页只保留概览）。
+ * 外观页：总开关 + 预览/预设 + 4 个分类入口 + 保存与备份。
+ *
+ * 细项全部收进二级页（文字样式 / 位置与对齐 / 背景与附加信息 / 息屏沉浸），
+ * 这一页只负责「看效果、选分类、保存」，避免三十多个控件堆在一起。
  */
 @Composable
 fun StylePage(bottomPadding: Dp) {
@@ -33,7 +35,7 @@ fun StylePage(bottomPadding: Dp) {
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp),
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
             ) {
                 SwitchPreference(
                     title = stringResource(R.string.home_master_switch),
@@ -43,6 +45,9 @@ fun StylePage(bottomPadding: Dp) {
                 )
             }
         }
-        item { StyleEditorCard(data) }
+        item { StylePreviewCard(data) }
+        item { StyleGroupsCard(data) }
+        item { StyleSaveCard(data) }
+        item { StyleBackupCard() }
     }
 }

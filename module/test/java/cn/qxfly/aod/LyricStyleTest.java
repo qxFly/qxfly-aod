@@ -24,6 +24,7 @@ final class LyricStyleTest {
         // 沉浸默认关闭：不改变现有用户看到的息屏。
         T.eq("style default immersive", 0, s.immersive);
         T.ok("style default landscape off", !s.landscape);
+        T.eq("style default immersive grid", 4, s.immersiveGrid);
     }
 
     private static void clamp() {
@@ -40,5 +41,12 @@ final class LyricStyleTest {
         T.eq("resolved radius clamps the field", 40f, s.resolvedBgRadiusDp());
         s.bgRadiusDp = -3f;
         T.eq("resolved radius clamps negatives", 0f, s.resolvedBgRadiusDp());
+
+        // 九宫格：0..8 原样保留，越界回落到居中（4）。
+        T.eq("grid 0 kept", 0, LyricStyle.clampGrid(0));
+        T.eq("grid 8 kept", 8, LyricStyle.clampGrid(8));
+        T.eq("grid center kept", 4, LyricStyle.clampGrid(4));
+        T.eq("grid negative falls back to center", 4, LyricStyle.clampGrid(-1));
+        T.eq("grid above max falls back to center", 4, LyricStyle.clampGrid(9));
     }
 }

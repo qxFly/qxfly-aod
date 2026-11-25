@@ -101,6 +101,12 @@ public final class LyricStyle {
     /** true = 设备横放时把歌词转 90°（AOD 窗口本身不跟随时）。 */
     public boolean landscape;
 
+    /**
+     * 沉浸模式下的九宫格位置：0..8 行优先，4 = 居中。
+     * 见 {@link StateKeys#STYLE_IMMERSIVE_GRID}。
+     */
+    public int immersiveGrid = StateKeys.IMMERSIVE_GRID_DEFAULT;
+
     @NonNull
     public static LyricStyle fromBundle(@Nullable android.os.Bundle b) {
         LyricStyle s = new LyricStyle();
@@ -132,12 +138,20 @@ public final class LyricStyle {
         s.pauseKeep = !"0".equals(b.getString(StateKeys.STYLE_PAUSE_KEEP));
         s.immersive = clampImmersive(parseDecimal(b.getString(StateKeys.STYLE_IMMERSIVE), 0));
         s.landscape = "1".equals(b.getString(StateKeys.STYLE_LANDSCAPE));
+        s.immersiveGrid = clampGrid(parseDecimal(b.getString(StateKeys.STYLE_IMMERSIVE_GRID),
+                StateKeys.IMMERSIVE_GRID_DEFAULT));
         return s;
     }
 
     /** 沉浸模式只接受 0..2，越界一律当作关闭。 */
     private static int clampImmersive(int raw) {
         return raw >= 0 && raw <= StateKeys.IMMERSIVE_WALLPAPER ? raw : StateKeys.IMMERSIVE_OFF;
+    }
+
+    /** 九宫格只接受 0..8，越界回落到居中（旧配置没有这个键时也是居中）。 */
+    static int clampGrid(int raw) {
+        return raw >= StateKeys.IMMERSIVE_GRID_MIN && raw <= StateKeys.IMMERSIVE_GRID_MAX
+                ? raw : StateKeys.IMMERSIVE_GRID_DEFAULT;
     }
 
     /**
@@ -213,6 +227,7 @@ public final class LyricStyle {
         b.putString(StateKeys.STYLE_PAUSE_KEEP, pauseKeep ? "1" : "0");
         b.putString(StateKeys.STYLE_IMMERSIVE, String.valueOf(immersive));
         b.putString(StateKeys.STYLE_LANDSCAPE, landscape ? "1" : "0");
+        b.putString(StateKeys.STYLE_IMMERSIVE_GRID, String.valueOf(immersiveGrid));
         return b;
     }
 

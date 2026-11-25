@@ -211,6 +211,21 @@ public final class StateKeys {
     public static final int IMMERSIVE_WALLPAPER = 2;
     /** true = 设备横放时把歌词转 90°（AOD 窗口本身不旋转时生效）。 */
     public static final String STYLE_LANDSCAPE = "styleLandscape";
+    /**
+     * 沉浸模式下的九宫格定位，0..8 行优先：
+     * <pre>
+     * 0 左上   1 中上   2 右上
+     * 3 左中   4 居中   5 右中
+     * 6 左下   7 中下   8 右下
+     * </pre>
+     * 行决定垂直（上/中/下），列决定水平（左/中/右）。只在沉浸模式下生效，
+     * 普通模式仍用 {@link #STYLE_OFFSET_RATIO} + {@link #STYLE_ALIGN}。
+     */
+    public static final String STYLE_IMMERSIVE_GRID = "styleImmersiveGrid";
+    /** 九宫格下标范围与默认值（居中）。 */
+    public static final int IMMERSIVE_GRID_MIN = 0;
+    public static final int IMMERSIVE_GRID_DEFAULT = 4;
+    public static final int IMMERSIVE_GRID_MAX = 8;
 
     /**
      * Live translation of the current line, pushed alongside {@link #LYRIC_LINE}.
@@ -227,7 +242,7 @@ public final class StateKeys {
             STYLE_SHOW_TRANSLATION, STYLE_FONT_STAMP,
             STYLE_BG_ENABLED, STYLE_BG_COLOR, STYLE_BG_ALPHA, STYLE_BG_RADIUS,
             STYLE_SHOW_TRACK, STYLE_SHOW_NEXT, STYLE_SHOW_PROGRESS, STYLE_PAUSE_KEEP,
-            STYLE_IMMERSIVE, STYLE_LANDSCAPE,
+            STYLE_IMMERSIVE, STYLE_LANDSCAPE, STYLE_IMMERSIVE_GRID,
     };
 
     public static android.net.Uri stateUri() {
