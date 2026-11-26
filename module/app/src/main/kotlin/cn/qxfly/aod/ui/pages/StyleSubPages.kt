@@ -84,15 +84,21 @@ private fun StyleSubPage(
     }
 }
 
-// ── 文字样式 ──────────────────────────────────────────────────────────
+// ── 文字、背景与附加信息 ─────────────────────────────────────────────
 
-/** 二级页：字号 / 描边 / 颜色 / 字体 / 粗体 / 翻译。 */
+/**
+ * 二级页：文字外观 + 背景板 + 附加信息。
+ *
+ * 原来是「文字样式」和「背景与附加信息」两页，用户反馈分得太碎，
+ * 现在合成一页，用「文字 / 背景 / 附加信息」三个小节标题分段。
+ */
 @Composable
 internal fun StyleTextPage(bottomPadding: Dp) {
     val context = LocalContext.current
     var customFontLabel by remember { mutableStateOf(readCustomFontLabel(context)) }
     var showColorPicker by remember { mutableStateOf(false) }
     var showStrokeColorPicker by remember { mutableStateOf(false) }
+    var showBgColorPicker by remember { mutableStateOf(false) }
     val fontImportFailedMsg = stringResource(R.string.font_custom_failed)
 
     // 自定义字体：文件由系统文件选择器（SAF）导入到应用私有目录，
@@ -119,20 +125,22 @@ internal fun StyleTextPage(bottomPadding: Dp) {
     ) {
         val draft = StyleDraftStore.draft
 
+        // ── 文字 ──
+        SectionHeader(stringResource(R.string.style_section_text), first = true)
         SliderRow(
             label = stringResource(R.string.style_text_size),
             value = draft.textSizeSp,
             range = 12f..40f,
             defaultValue = 20f,
             format = { "${it.toInt()}" },
-            onChange = { StyleDraftStore.draft = draft.copy(textSizeSp = it) },
+            onChange = { StyleDraftStore.draft = StyleDraftStore.draft.copy(textSizeSp = it) },
         )
         SliderRow(
             label = stringResource(R.string.style_stroke_width),
             value = draft.strokeWidth,
             range = 0f..6f,
             defaultValue = 0f,
-            onChange = { StyleDraftStore.draft = draft.copy(strokeWidth = it) },
+            onChange = { StyleDraftStore.draft = StyleDraftStore.draft.copy(strokeWidth = it) },
         )
         if (draft.strokeWidth > 0.5f) {
             Text(
@@ -142,7 +150,7 @@ internal fun StyleTextPage(bottomPadding: Dp) {
             )
             ColorSwatches(
                 selected = draft.strokeColor,
-                onPick = { StyleDraftStore.draft = draft.copy(strokeColor = it) },
+                onPick = { StyleDraftStore.draft = StyleDraftStore.draft.copy(strokeColor = it) },
                 onCustom = { showStrokeColorPicker = true },
             )
         }
@@ -151,7 +159,7 @@ internal fun StyleTextPage(bottomPadding: Dp) {
         Text(stringResource(R.string.style_color), fontSize = 13.sp)
         ColorSwatches(
             selected = draft.textColor,
-            onPick = { StyleDraftStore.draft = draft.copy(textColor = it) },
+            onPick = { StyleDraftStore.draft = StyleDraftStore.draft.copy(textColor = it) },
             onCustom = { showColorPicker = true },
         )
 
@@ -168,14 +176,18 @@ internal fun StyleTextPage(bottomPadding: Dp) {
                     label = stringResource(labelRes),
                     selected = draft.typefaceName == value,
                     modifier = Modifier.weight(1f),
-                    onClick = { StyleDraftStore.draft = draft.copy(typefaceName = value) },
+                    onClick = {
+                        StyleDraftStore.draft = StyleDraftStore.draft.copy(typefaceName = value)
+                    },
                 )
             }
             SelectableChip(
                 label = stringResource(R.string.font_custom),
                 selected = draft.typefaceName == "custom",
                 modifier = Modifier.weight(1f),
-                onClick = { StyleDraftStore.draft = draft.copy(typefaceName = "custom") },
+                onClick = {
+                    StyleDraftStore.draft = StyleDraftStore.draft.copy(typefaceName = "custom")
+                },
             )
         }
         if (draft.typefaceName == "custom") {
@@ -224,7 +236,92 @@ internal fun StyleTextPage(bottomPadding: Dp) {
             title = stringResource(R.string.style_show_translation),
             summary = stringResource(R.string.style_show_translation_summary),
             checked = draft.showTranslation,
-            onChange = { v -> StyleDraftStore.draft = draft.copy(showTranslation = v) },
+            onChange = { v ->
+                StyleDraftStore.draft = StyleDraftStore.draft.copy(showTranslation = v)
+            },
+        )
+
+        // ── 背景 ──
+        SectionHeader(stringResource(R.string.style_section_bg))
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = stringResource(R.string.style_bg_summary),
+                modifier = Modifier.weight(1f),
+                fontSize = 12.sp,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            )
+            Switch(
+                checked = draft.bgEnabled,
+                onCheckedChange = { v ->
+                    StyleDraftStore.draft = StyleDraftStore.draft.copy(bgEnabled = v)
+                },
+            )
+        }
+        if (draft.bgEnabled) {
+            Text(
+                text = stringResource(R.string.style_bg_color),
+                fontSize = 13.sp,
+                modifier = Modifier.padding(top = 2.dp, bottom = 4.dp),
+            )
+            ColorSwatches(
+                selected = draft.bgColor,
+                onPick = { StyleDraftStore.draft = StyleDraftStore.draft.copy(bgColor = it) },
+                onCustom = { showBgColorPicker = true },
+            )
+            SliderRow(
+                label = stringResource(R.string.style_bg_alpha),
+                value = draft.bgAlpha,
+                range = 0f..1f,
+                defaultValue = 0.45f,
+                format = { "${(it * 100).toInt()}%" },
+                toInput = { Math.round(it * 100).toString() },
+                fromInput = { it.trim().removeSuffix("%").trim().toFloatOrNull()?.div(100f) },
+                onChange = { StyleDraftStore.draft = StyleDraftStore.draft.copy(bgAlpha = it) },
+            )
+            SliderRow(
+                label = stringResource(R.string.style_bg_radius),
+                value = draft.bgRadiusDp,
+                range = 0f..40f,
+                defaultValue = 24f,
+                format = { "${it.toInt()} dp" },
+                toInput = { it.toInt().toString() },
+                fromInput = { it.trim().removeSuffix("dp").trim().toFloatOrNull() },
+                onChange = { StyleDraftStore.draft = StyleDraftStore.draft.copy(bgRadiusDp = it) },
+            )
+        }
+
+        // ── 附加信息 ──
+        SectionHeader(stringResource(R.string.style_extra_section))
+        LabeledSwitchRow(
+            title = stringResource(R.string.style_show_track),
+            summary = stringResource(R.string.style_show_track_summary),
+            checked = draft.showTrack,
+            onChange = { v -> StyleDraftStore.draft = StyleDraftStore.draft.copy(showTrack = v) },
+        )
+        LabeledSwitchRow(
+            title = stringResource(R.string.style_show_next),
+            summary = stringResource(R.string.style_show_next_summary),
+            checked = draft.showNext,
+            onChange = { v -> StyleDraftStore.draft = StyleDraftStore.draft.copy(showNext = v) },
+        )
+        LabeledSwitchRow(
+            title = stringResource(R.string.style_show_progress),
+            summary = stringResource(R.string.style_show_progress_summary),
+            checked = draft.showProgress,
+            onChange = { v ->
+                StyleDraftStore.draft = StyleDraftStore.draft.copy(showProgress = v)
+            },
+        )
+        LabeledSwitchRow(
+            title = stringResource(R.string.style_pause_keep),
+            summary = stringResource(R.string.style_pause_keep_summary),
+            checked = draft.pauseKeep,
+            onChange = { v -> StyleDraftStore.draft = StyleDraftStore.draft.copy(pauseKeep = v) },
         )
     }
 
@@ -248,6 +345,29 @@ internal fun StyleTextPage(bottomPadding: Dp) {
             },
         )
     }
+    if (showBgColorPicker) {
+        ColorPickerDialog(
+            initial = StyleDraftStore.draft.bgColor,
+            onDismiss = { showBgColorPicker = false },
+            onConfirm = { argb ->
+                StyleDraftStore.draft = StyleDraftStore.draft.copy(bgColor = argb)
+                showBgColorPicker = false
+            },
+        )
+    }
+}
+
+/** 卡片内的小节标题：把一页拆成「文字 / 背景 / 附加信息」三段。 */
+@Composable
+private fun SectionHeader(text: String, first: Boolean = false) {
+    Spacer(Modifier.height(if (first) 0.dp else 18.dp))
+    Text(
+        text = text,
+        fontSize = 13.sp,
+        fontWeight = FontWeight.Medium,
+        color = MiuixTheme.colorScheme.primary,
+        modifier = Modifier.padding(bottom = 2.dp),
+    )
 }
 
 // ── 位置与对齐 ────────────────────────────────────────────────────────
@@ -380,113 +500,7 @@ internal fun StyleLayoutPage(bottomPadding: Dp) {
     }
 }
 
-// ── 背景与附加信息 ────────────────────────────────────────────────────
 
-/** 二级页：背景板（颜色/不透明度/圆角）+ 附加信息 4 个开关。 */
-@Composable
-internal fun StyleExtraPage(bottomPadding: Dp) {
-    var showBgColorPicker by remember { mutableStateOf(false) }
-
-    StyleSubPage(
-        title = stringResource(R.string.style_group_extra),
-        subtitle = stringResource(R.string.style_group_extra_summary),
-        bottomPadding = bottomPadding,
-    ) {
-        val draft = StyleDraftStore.draft
-
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(stringResource(R.string.style_bg), fontSize = 13.sp)
-                Text(
-                    text = stringResource(R.string.style_bg_summary),
-                    fontSize = 11.sp,
-                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                )
-            }
-            Switch(
-                checked = draft.bgEnabled,
-                onCheckedChange = { v -> StyleDraftStore.draft = draft.copy(bgEnabled = v) },
-            )
-        }
-        if (draft.bgEnabled) {
-            Text(
-                text = stringResource(R.string.style_bg_color),
-                fontSize = 13.sp,
-                modifier = Modifier.padding(top = 2.dp, bottom = 4.dp),
-            )
-            ColorSwatches(
-                selected = draft.bgColor,
-                onPick = { StyleDraftStore.draft = draft.copy(bgColor = it) },
-                onCustom = { showBgColorPicker = true },
-            )
-            SliderRow(
-                label = stringResource(R.string.style_bg_alpha),
-                value = draft.bgAlpha,
-                range = 0f..1f,
-                defaultValue = 0.45f,
-                format = { "${(it * 100).toInt()}%" },
-                toInput = { Math.round(it * 100).toString() },
-                fromInput = { it.trim().removeSuffix("%").trim().toFloatOrNull()?.div(100f) },
-                onChange = { StyleDraftStore.draft = draft.copy(bgAlpha = it) },
-            )
-            SliderRow(
-                label = stringResource(R.string.style_bg_radius),
-                value = draft.bgRadiusDp,
-                range = 0f..40f,
-                defaultValue = 24f,
-                format = { "${it.toInt()} dp" },
-                toInput = { it.toInt().toString() },
-                fromInput = { it.trim().removeSuffix("dp").trim().toFloatOrNull() },
-                onChange = { StyleDraftStore.draft = draft.copy(bgRadiusDp = it) },
-            )
-        }
-
-        Spacer(Modifier.height(12.dp))
-        Text(
-            text = stringResource(R.string.style_extra_section),
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Medium,
-        )
-        LabeledSwitchRow(
-            title = stringResource(R.string.style_show_track),
-            summary = stringResource(R.string.style_show_track_summary),
-            checked = draft.showTrack,
-            onChange = { v -> StyleDraftStore.draft = draft.copy(showTrack = v) },
-        )
-        LabeledSwitchRow(
-            title = stringResource(R.string.style_show_next),
-            summary = stringResource(R.string.style_show_next_summary),
-            checked = draft.showNext,
-            onChange = { v -> StyleDraftStore.draft = draft.copy(showNext = v) },
-        )
-        LabeledSwitchRow(
-            title = stringResource(R.string.style_show_progress),
-            summary = stringResource(R.string.style_show_progress_summary),
-            checked = draft.showProgress,
-            onChange = { v -> StyleDraftStore.draft = draft.copy(showProgress = v) },
-        )
-        LabeledSwitchRow(
-            title = stringResource(R.string.style_pause_keep),
-            summary = stringResource(R.string.style_pause_keep_summary),
-            checked = draft.pauseKeep,
-            onChange = { v -> StyleDraftStore.draft = draft.copy(pauseKeep = v) },
-        )
-    }
-
-    if (showBgColorPicker) {
-        ColorPickerDialog(
-            initial = StyleDraftStore.draft.bgColor,
-            onDismiss = { showBgColorPicker = false },
-            onConfirm = { argb ->
-                StyleDraftStore.draft = StyleDraftStore.draft.copy(bgColor = argb)
-                showBgColorPicker = false
-            },
-        )
-    }
-}
 
 // ── 息屏沉浸 ──────────────────────────────────────────────────────────
 

@@ -46,10 +46,6 @@ sealed interface Route : NavKey {
     @Serializable
     data object StyleLayout : Route
 
-    /** 背景与附加信息：背景板 / 歌名 / 下一句 / 进度。 */
-    @Serializable
-    data object StyleExtra : Route
-
     /** 息屏沉浸：模式 / 九宫格定位 / 横屏。 */
     @Serializable
     data object StyleImmersive : Route

@@ -293,10 +293,9 @@ internal fun StylePreviewCard(data: ModuleData) {
 }
 
 /**
- * 4 个功能分类的入口卡：主页只显示「当前值摘要」，点进去才是二级页。
+ * 3 个功能分类的入口卡：主页只显示「当前值摘要」，点进去才是二级页。
  *
- * 分组原则：按用户调节时的目的分，而不是按控件类型分——
- * 文字外观 / 放在哪里 / 额外显示什么 / 息屏沉浸。
+ * 分组原则：按用户调节时的目的分——文字/背景/附加显示、放在哪里、息屏沉浸。
  */
 @Composable
 internal fun StyleGroupsCard(data: ModuleData) {
@@ -319,11 +318,6 @@ internal fun StyleGroupsCard(data: ModuleData) {
             title = stringResource(R.string.style_group_layout),
             summary = layoutSummary(draft, components),
         ) { navigator.push(Route.StyleLayout) }
-        GroupDivider()
-        GroupRow(
-            title = stringResource(R.string.style_group_extra),
-            summary = extraSummary(draft),
-        ) { navigator.push(Route.StyleExtra) }
         GroupDivider()
         GroupRow(
             title = stringResource(R.string.style_group_immersive),
@@ -515,7 +509,7 @@ private fun GroupDivider() {
     )
 }
 
-/** 文字样式摘要：字号 · 字体 · 颜色。 */
+/** 文字摘要：字号 · 字体 · 颜色（· 背景开）（· 歌名/下一句/进度/翻译）。 */
 @Composable
 private fun textStyleSummary(d: StyleDraft): String {
     val font = when (d.typefaceName) {
@@ -526,7 +520,24 @@ private fun textStyleSummary(d: StyleDraft): String {
         else -> stringResource(R.string.font_system)
     }
     val color = "#" + String.format(java.util.Locale.US, "%06X", d.textColor and 0xFFFFFF)
-    return stringResource(R.string.style_group_text_value, d.textSizeSp.toInt(), font, color)
+    val parts = mutableListOf(
+        stringResource(R.string.style_group_text_value, d.textSizeSp.toInt(), font, color),
+    )
+    if (d.bgEnabled) {
+        parts += stringResource(R.string.style_summary_bg_on)
+    }
+    val extras = mutableListOf<String>()
+    if (d.showTrack) extras += stringResource(R.string.style_summary_track)
+    if (d.showNext) extras += stringResource(R.string.style_summary_next)
+    if (d.showProgress) extras += stringResource(R.string.style_summary_progress)
+    if (d.showTranslation) extras += stringResource(R.string.style_summary_translation)
+    if (extras.isNotEmpty()) {
+        parts += extras.joinToString("/")
+    }
+    if (!d.pauseKeep) {
+        parts += stringResource(R.string.style_summary_pause_off)
+    }
+    return parts.joinToString(" · ")
 }
 
 /** 位置摘要：沉浸模式下由九宫格决定，否则是「对齐 + 垂直百分比」或锚点组件。 */
@@ -551,30 +562,12 @@ private fun layoutSummary(d: StyleDraft, components: List<AnchorComponent>): Str
 
 /** 粗粒度锚点的可读名：组件清单里没有对应项时兜底，避免摘要显示裸 id。 */
 @Composable
-private fun coarseAnchorName(id: String): String = when (val coarse = coarseAnchorId(id) ?: id) {
-    "clock" -> stringResource(R.string.style_anchor_name_clock)
-    "image" -> stringResource(R.string.style_anchor_name_image)
-    "timedate" -> stringResource(R.string.style_anchor_name_timedate)
-    "notify" -> stringResource(R.string.style_anchor_name_notify)
-    else -> coarse
-}
-
-/** 附加信息摘要：背景开关 + 已开启的附加项。 */
-@Composable
-private fun extraSummary(d: StyleDraft): String {
-    val parts = mutableListOf(
-        if (d.bgEnabled) {
-            stringResource(R.string.style_summary_bg_on)
-        } else {
-            stringResource(R.string.style_summary_bg_off)
-        },
-    )
-    if (d.showTrack) parts += stringResource(R.string.style_summary_track)
-    if (d.showNext) parts += stringResource(R.string.style_summary_next)
-    if (d.showProgress) parts += stringResource(R.string.style_summary_progress)
-    if (d.showTranslation) parts += stringResource(R.string.style_summary_translation)
-    if (!d.pauseKeep) parts += stringResource(R.string.style_summary_pause_off)
-    return parts.joinToString(" · ")
+private fun coarseAnchorName(id: String): String = when (coarseAnchorId(id) ?: id) {
+    "clock" -> stringResource(R.string.anchor_name_clock)
+    "image" -> stringResource(R.string.anchor_name_image)
+    "timedate" -> stringResource(R.string.anchor_name_timedate)
+    "notify" -> stringResource(R.string.anchor_name_notify)
+    else -> stringResource(R.string.anchor_name_other)
 }
 
 /** 沉浸摘要：关闭 / 模式 · 九宫格位置（· 横屏）。 */

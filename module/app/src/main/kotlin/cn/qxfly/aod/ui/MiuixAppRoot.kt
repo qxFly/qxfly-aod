@@ -31,7 +31,6 @@ import cn.qxfly.aod.ui.pages.DiagnosticsPage
 import cn.qxfly.aod.ui.pages.HomePage
 import cn.qxfly.aod.ui.pages.SettingsPage
 import cn.qxfly.aod.ui.pages.StylePage
-import cn.qxfly.aod.ui.pages.StyleExtraPage
 import cn.qxfly.aod.ui.pages.StyleImmersivePage
 import cn.qxfly.aod.ui.pages.StyleLayoutPage
 import cn.qxfly.aod.ui.pages.StyleTextPage
@@ -107,7 +106,6 @@ fun MiuixAppRoot(
                             entry<Route.Diagnostics> { DiagnosticsPage(bottomPadding) }
                             entry<Route.StyleText> { StyleTextPage(bottomPadding) }
                             entry<Route.StyleLayout> { StyleLayoutPage(bottomPadding) }
-                            entry<Route.StyleExtra> { StyleExtraPage(bottomPadding) }
                             entry<Route.StyleImmersive> { StyleImmersivePage(bottomPadding) }
                         }
                     }

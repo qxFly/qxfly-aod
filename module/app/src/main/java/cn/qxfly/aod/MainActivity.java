@@ -312,8 +312,7 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
             }
             String id = parts[0];
             String cls = parts[1];
-            String bounds = parts.length > 2 ? parts[2] : "";
-            list.add(new cn.qxfly.aod.ui.core.AnchorComponent(id, componentLabel(id, cls, bounds)));
+            list.add(new cn.qxfly.aod.ui.core.AnchorComponent(id, componentLabel(id, cls)));
         }
         java.util.List<cn.qxfly.aod.ui.core.AnchorComponent> old =
                 hub.getComponents().getValue();
@@ -322,37 +321,35 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
         }
     }
 
-    /** "gradient_layout" -> "时钟区（渐变容器）" style labels. */
+    /**
+     * 锚点下拉的中文名：只给中文描述，不带 id / class / bounds（用户要求）。
+     * 4 个粗粒度区域走字符串资源，与主页摘要共用同一套文案。
+     */
     @NonNull
-    private static String componentLabel(@NonNull String id, @NonNull String cls,
-                                         @NonNull String bounds) {
-        String cn;
-        switch (id) {
-            case "clock" -> cn = "大时钟";
-            case "image" -> cn = "图片";
-            case "timedate" -> cn = "时间日期组件";
-            case "notify" -> cn = "通知";
-            case "clock_horizontal" -> cn = "时钟（横向）";
-            case "date" -> cn = "日期";
-            case "date_lunar" -> cn = "农历";
-            case "gradient_layout" -> cn = "时钟区（渐变容器）";
-            case "battery_step_container" -> cn = "电量";
-            case "image_shower", "image_shower_container", "image_selector_shower" -> cn = "壁纸照片";
-            case "aod_icons_container" -> cn = "通知图标";
-            case "aod_content_container", "content" -> cn = "内容区";
-            case "aod_bg" -> cn = "背景";
-            case "clock_container" -> cn = "防烧屏容器";
-            default -> {
-                if (cls.contains("TextView")) {
-                    cn = "文本";
-                } else if (cls.contains("ImageView")) {
-                    cn = "图片";
-                } else {
-                    cn = "组件";
-                }
-            }
+    private String componentLabel(@NonNull String id, @NonNull String cls) {
+        String canonical = AnchorIds.canonicalCandidates(id) != null
+                ? id
+                : AnchorIds.legacyToCanonical(id);
+        if (AnchorIds.ANCHOR_CLOCK.equals(canonical)) {
+            return getString(R.string.anchor_name_clock);
         }
-        return cn + " · " + id + " " + bounds;
+        if (AnchorIds.ANCHOR_IMAGE.equals(canonical)) {
+            return getString(R.string.anchor_name_image);
+        }
+        if (AnchorIds.ANCHOR_TIMEDATE.equals(canonical)) {
+            return getString(R.string.anchor_name_timedate);
+        }
+        if (AnchorIds.ANCHOR_NOTIFY.equals(canonical)) {
+            return getString(R.string.anchor_name_notify);
+        }
+        // 未识别的自定义锚点：按类名给一个中文兜底，绝不出现英文 id。
+        if (cls.contains("TextView")) {
+            return getString(R.string.anchor_name_text);
+        }
+        if (cls.contains("ImageView")) {
+            return getString(R.string.anchor_name_image_only);
+        }
+        return getString(R.string.anchor_name_other);
     }
 
     /** Publishes the status card into the Compose state. */

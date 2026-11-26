@@ -1432,6 +1432,35 @@ public final class AodOverlayController {
         if (anchor == null || anchor == tv) {
             return false;
         }
+        // 通知容器即使没有通知也保留整块高度：直接按容器底边定位会留下大片空白。
+        // 没有通知内容时，向下（anchorPos=1）改贴整个时钟区域的下沿（日期/电量下方）；
+        // 向上（anchorPos=0）保留容器上沿，歌词仍然紧贴通知区上方。
+        int anchorH = anchor.getHeight();
+        if (ANCHOR_NOTIFY.equals(canonicalRegion(anchorId))) {
+            int content = visibleContentHeight(anchor);
+            if (content != sLastNotifyContent) {
+                sLastNotifyContent = content;
+                AodLyricModule.i("notify anchor content=" + content + " container=" + anchorH
+                        + (content > 0 ? ""
+                                : (sStyle.anchorPos == 0 ? " -> hug container top"
+                                        : " -> use clock block")));
+            }
+            if (content <= 0) {
+                if (sStyle.anchorPos == 0) {
+                    anchorH = 0;
+                } else {
+                    android.view.View clock = resolveAnchor(container, ANCHOR_CLOCK);
+                    if (clock != null && clock != tv) {
+                        anchor = clock;
+                        anchorH = clock.getHeight();
+                    } else {
+                        anchorH = 0;
+                    }
+                }
+            } else if (content < anchorH) {
+                anchorH = content;
+            }
+        }
         // Convert the anchor's top edge into the container's coordinate space.
         float anchorTop = anchorTopInContainer(anchor, container);
         if (anchorTop == Float.MAX_VALUE) {
@@ -1443,7 +1472,7 @@ public final class AodOverlayController {
         }
         float target = sStyle.anchorPos == 0
                 ? anchorTop - sStyle.anchorGap - tvH
-                : anchorTop + anchor.getHeight() + sStyle.anchorGap;
+                : anchorTop + anchorH + sStyle.anchorGap;
         if (Math.abs(target - tv.getTranslationY()) < 0.5f) {
             return true; // already in place; avoid pointless invalidations
         }
@@ -1537,6 +1566,85 @@ public final class AodOverlayController {
     /** True when the lyric is currently parented to the movable container. */
     public static boolean isFollowingClock() {
         return sInClockContainer;
+    }
+
+    /** Canonical 4-region id for any stored anchor id (null when unrecognised). */
+    @Nullable
+    private static String canonicalRegion(@NonNull String anchorId) {
+        if (canonicalCandidates(anchorId) != null) {
+            return anchorId;
+        }
+        return legacyToCanonical(anchorId);
+    }
+
+    /**
+     * How far down the anchor's visible content reaches, relative to its own top
+     * (0 = nothing to show). Used for the notification container, which keeps a
+     * fixed height even when there is nothing to show.
+     *
+     * <p>Recursive: the theme hides the icon row by hiding the individual icon
+     * views while the row itself stays VISIBLE with its full height, so a
+     * one-level scan would still report 78px of "content" and leave the gap the
+     * user complained about.
+     */
+    private static int visibleContentHeight(@NonNull android.view.View anchor) {
+        if (!(anchor instanceof ViewGroup) || !hasRealContent(anchor)) {
+            return 0;
+        }
+        ViewGroup g = (ViewGroup) anchor;
+        int max = 0;
+        for (int i = 0; i < g.getChildCount(); i++) {
+            android.view.View c = g.getChildAt(i);
+            if (c == null || c.getVisibility() != android.view.View.VISIBLE || c.getHeight() <= 0
+                    || !hasRealContent(c)) {
+                continue;
+            }
+            // A group whose every leaf is hidden/empty is skipped, otherwise the
+            // reserved-but-unused icon row counts as content.
+            int bottom;
+            if (c instanceof ViewGroup) {
+                int inner = visibleContentHeight(c);
+                if (inner <= 0) {
+                    continue;
+                }
+                bottom = c.getTop() + inner;
+            } else {
+                bottom = c.getTop() + c.getHeight();
+            }
+            max = Math.max(max, bottom);
+        }
+        return max;
+    }
+
+    /**
+     * True when a view actually shows something. The notification icon row is
+     * kept VISIBLE with its full size even with zero notifications - only its
+     * ImageViews lose their drawable - so visibility/size alone cannot tell an
+     * empty row from a populated one.
+     */
+    private static boolean hasRealContent(@NonNull android.view.View v) {
+        if (v.getVisibility() != android.view.View.VISIBLE || v.getAlpha() <= 0.01f) {
+            return false;
+        }
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) {
+                android.view.View c = g.getChildAt(i);
+                if (c != null && hasRealContent(c)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        if (v instanceof android.widget.ImageView) {
+            android.graphics.drawable.Drawable d = ((android.widget.ImageView) v).getDrawable();
+            return d != null && d.getIntrinsicWidth() > 0 && d.getIntrinsicHeight() > 0;
+        }
+        if (v instanceof android.widget.TextView) {
+            CharSequence t = ((android.widget.TextView) v).getText();
+            return t != null && t.length() > 0;
+        }
+        return v.getWidth() > 0 && v.getHeight() > 0;
     }
 
     /** The view's current parent, or the remembered clock container. */
@@ -1888,7 +1996,8 @@ public final class AodOverlayController {
                         + " bounds=[" + c.getLeft() + "," + c.getTop()
                         + " " + c.getWidth() + "x" + c.getHeight() + "]"
                         + " vis=" + (c.getVisibility() == android.view.View.VISIBLE ? "V" : "H")
-                        + " alpha=" + String.format("%.2f", c.getAlpha()));
+                        + " alpha=" + String.format("%.2f", c.getAlpha())
+                        + contentHint(c));
                 if (c instanceof ViewGroup) {
                     dumpTree((ViewGroup) c, depth + 1);
                 }
@@ -1896,6 +2005,25 @@ public final class AodOverlayController {
         } catch (Throwable t) {
             AodLyricModule.w("tree dump failed: " + t);
         }
+    }
+
+    /** Dump-only hint: whether an ImageView has a drawable / a TextView has text. */
+    @NonNull
+    private static String contentHint(@NonNull android.view.View c) {
+        try {
+            if (c instanceof android.widget.ImageView) {
+                android.graphics.drawable.Drawable d =
+                        ((android.widget.ImageView) c).getDrawable();
+                return " drawable=" + (d == null ? "null"
+                        : d.getIntrinsicWidth() + "x" + d.getIntrinsicHeight());
+            }
+            if (c instanceof android.widget.TextView) {
+                CharSequence t = ((android.widget.TextView) c).getText();
+                return " text=" + (t == null ? -1 : t.length());
+            }
+        } catch (Throwable ignored) {
+        }
+        return "";
     }
 
     @NonNull
@@ -1930,6 +2058,9 @@ public final class AodOverlayController {
 
     /** Guards the one-shot diagnostic tree dump. */
     private static volatile boolean sDumpedTree;
+
+    /** Last measured notify content height; the log line only fires when it changes. */
+    private static int sLastNotifyContent = -2;
 
     /**
      * Moves the lyric into {@code clock_container} once the theme has inflated.

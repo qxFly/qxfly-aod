@@ -46,5 +46,17 @@ final class AnchorIdsTest {
         // Unrecognised ids stay untouched (custom components keep working).
         T.eq("unknown id survives",
                 null, AnchorIds.legacyToCanonical("my_custom_slot"));
+
+        // Canonical rewrite must keep the '|' separator: dropping it produced
+        // ids like "clockGradientLinearLayout" and an all-English picker.
+        T.eq("canonical line keeps separator",
+                "clock|GradientLinearLayout|[324,657 551x195]",
+                ComponentCollector.canonicalLine("clock", "gradient_layout",
+                        "gradient_layout|GradientLinearLayout|[324,657 551x195]"));
+        T.eq("canonical line bounds",
+                "[324,657 551x195]",
+                ComponentCollector.boundsOf(
+                        "clock|GradientLinearLayout|[324,657 551x195]"));
+        T.eq("bounds of short line is empty", "", ComponentCollector.boundsOf("clock|X"));
     }
 }

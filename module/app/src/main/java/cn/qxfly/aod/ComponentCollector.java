@@ -37,6 +37,9 @@ public final class ComponentCollector {
                                   @NonNull List<String> out, int depth, int absX, int absY) {
         List<String> raw = new java.util.ArrayList<>(24);
         collectRawComponents(parent, raw, 0, 0, 0);
+        // 不同区域可能物理重合（例如图片铺满整屏、与时钟区域同一块），
+        // 这种重复项只保留先出现的一个，避免下拉里出现两个效果一样的锚点。
+        java.util.Set<String> seenBounds = new java.util.HashSet<>();
         for (String canonical : ANCHOR_ORDER) {
             String[] cands = canonicalCandidates(canonical);
             if (cands == null) {
@@ -45,15 +48,41 @@ public final class ComponentCollector {
             for (String cand : cands) {
                 String line = findById(raw, cand);
                 if (line != null) {
-                    // Replace the fine-grained name with the canonical one but
-                    // keep the discovered class and absolute bounds.
-                    String rest = line.substring(cand.length() + 1);
-                    out.add(canonical + rest);
+                    String canonicalEntry = canonicalLine(canonical, cand, line);
+                    String bounds = boundsOf(canonicalEntry);
+                    if (!bounds.isEmpty() && !seenBounds.add(bounds)) {
+                        AodLyricModule.i("anchor region " + canonical
+                                + " duplicates an earlier region, skipped: " + bounds);
+                        continue;
+                    }
+                    out.add(canonicalEntry);
                     break;
                 }
             }
         }
         AodLyricModule.i("anchor regions reported: " + out);
+    }
+
+    /**
+     * Rewrites a discovered raw line {@code "cand|Class|[x,y wxh]"} into the
+     * canonical form {@code "canonical|Class|[x,y wxh]"}.
+     *
+     * <p>Package-private pure helper: the separator used to be dropped here,
+     * which turned the reported ids into {@code "clockGradientLinearLayout"}
+     * and made the picker show English class names. Covered by the JVM tests.
+     */
+    @NonNull
+    static String canonicalLine(@NonNull String canonical, @NonNull String cand,
+                                @NonNull String line) {
+        return canonical + "|" + line.substring(cand.length() + 1);
+    }
+
+    /** Absolute-bounds part of a {@code "id|Class|[x,y wxh]"} line ({@code ""} when absent). */
+    @NonNull
+    static String boundsOf(@NonNull String line) {
+        int first = line.indexOf('|');
+        int second = first < 0 ? -1 : line.indexOf('|', first + 1);
+        return second < 0 ? "" : line.substring(second + 1);
     }
 
     /**
