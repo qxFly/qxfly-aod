@@ -1769,7 +1769,11 @@ public final class AodOverlayController {
             default -> Gravity.CENTER_HORIZONTAL;
         });
         if (tv instanceof LyricTextView) {
-            ((LyricTextView) tv).setStroke(style.strokeWidth, style.strokeColor);
+            // 描边宽度按 dp 存，这里换算成 px：密度 3 的机器上 4dp = 12px，
+            // 而原来直接当 px 用，最大只有 6px（≈2dp），看起来像根细线。
+            float strokePx = style.resolvedStrokeDp()
+                    * tv.getResources().getDisplayMetrics().density;
+            ((LyricTextView) tv).setStroke(strokePx, style.strokeColor);
             ((LyricTextView) tv).setLyricBackground(
                     style.bgEnabled, style.bgColor, style.bgAlpha,
                     style.resolvedBgRadiusDp());
@@ -1819,7 +1823,7 @@ public final class AodOverlayController {
                 AodLyricModule.i("lyric style applied: size=" + style.textSizeSp
                         + " color=#" + Integer.toHexString(style.textColor)
                         + " typeface=" + style.typefaceName
-                        + " stroke=" + style.strokeWidth
+                        + " stroke=" + style.resolvedStrokeDp() + "dp"
                         + " anchor=" + (style.anchorId == null || style.anchorId.isEmpty()
                         ? "<ratio>" : style.anchorId + "/" + style.anchorPos));
             });

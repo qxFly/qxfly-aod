@@ -48,5 +48,16 @@ final class LyricStyleTest {
         T.eq("grid center kept", 4, LyricStyle.clampGrid(4));
         T.eq("grid negative falls back to center", 4, LyricStyle.clampGrid(-1));
         T.eq("grid above max falls back to center", 4, LyricStyle.clampGrid(9));
+
+        // 描边：数值是「字外厚度」的 dp，范围 0..4；旧版本存的 px 值也能读。
+        T.eq("stroke 0 kept", 0f, LyricStyle.clampStrokeDp(0f));
+        T.eq("stroke 1.5 kept", 1.5f, LyricStyle.clampStrokeDp(1.5f));
+        T.eq("stroke max kept", 4f, LyricStyle.clampStrokeDp(4f));
+        T.eq("stroke negative clamped", 0f, LyricStyle.clampStrokeDp(-2f));
+        T.eq("stroke above max clamped", 4f, LyricStyle.clampStrokeDp(9f));
+        T.eq("stroke NaN becomes 0", 0f, LyricStyle.clampStrokeDp(Float.NaN));
+        LyricStyle st = new LyricStyle();
+        st.strokeWidth = 6f;
+        T.eq("resolved stroke clamps the field", 4f, st.resolvedStrokeDp());
     }
 }

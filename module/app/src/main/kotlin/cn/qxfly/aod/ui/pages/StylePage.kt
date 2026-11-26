@@ -16,9 +16,9 @@ import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 
 /**
- * 外观页：总开关 + 预览/预设 + 4 个分类入口 + 保存与备份。
+ * 外观页：总开关 + 预览 + 3 个分类入口 + 保存与备份。
  *
- * 细项全部收进二级页（文字样式 / 位置与对齐 / 背景与附加信息 / 息屏沉浸），
+ * 细项全部收进二级页（文字、背景与附加信息 / 位置与对齐 / 息屏沉浸），
  * 这一页只负责「看效果、选分类、保存」，避免三十多个控件堆在一起。
  */
 @Composable

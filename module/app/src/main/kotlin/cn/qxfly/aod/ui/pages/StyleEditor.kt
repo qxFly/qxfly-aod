@@ -234,16 +234,15 @@ internal object StyleDraftStore {
 }
 
 /**
- * 外观主页第一张卡片：所见即所得预览 + 样式预设。
+ * 外观主页第一张卡片：所见即所得预览。
  *
- * 只放「看效果」和「一键换风格」——所有细项都收进下面的分类二级页，
- * 避免一个页面堆三十多个控件。
+ * 只放「看效果」——所有细项都收进下面的分类二级页，避免一个页面堆三十多个控件。
+ * （预设一键换风格已按用户要求移除：观感完全由二级页里的具体参数决定。）
  */
 @Composable
 internal fun StylePreviewCard(data: ModuleData) {
     StyleDraftStore.ensureLoaded(data)
     val draft = StyleDraftStore.draft
-    val context = LocalContext.current
 
     Card(
         modifier = Modifier
@@ -252,43 +251,6 @@ internal fun StylePreviewCard(data: ModuleData) {
         insideMargin = PaddingValues(16.dp),
     ) {
         StylePreview(draft)
-        Spacer(Modifier.height(12.dp))
-
-        Text(
-            text = stringResource(R.string.style_presets),
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Medium,
-        )
-        Spacer(Modifier.height(6.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            PresetChip(stringResource(R.string.style_preset_minimal)) {
-                StyleDraftStore.draft = applyPreset(StyleDraftStore.draft, Preset.MINIMAL)
-                StyleDraftStore.show(
-                    context.getString(
-                        R.string.style_preset_saved,
-                        context.getString(R.string.style_preset_minimal),
-                    ),
-                )
-            }
-            PresetChip(stringResource(R.string.style_preset_bold)) {
-                StyleDraftStore.draft = applyPreset(StyleDraftStore.draft, Preset.BOLD)
-                StyleDraftStore.show(
-                    context.getString(
-                        R.string.style_preset_saved,
-                        context.getString(R.string.style_preset_bold),
-                    ),
-                )
-            }
-            PresetChip(stringResource(R.string.style_preset_pill)) {
-                StyleDraftStore.draft = applyPreset(StyleDraftStore.draft, Preset.PILL)
-                StyleDraftStore.show(
-                    context.getString(
-                        R.string.style_preset_saved,
-                        context.getString(R.string.style_preset_pill),
-                    ),
-                )
-            }
-        }
     }
 }
 
@@ -637,47 +599,6 @@ internal fun LabeledSwitchRow(
     }
 }
 
-/** 预设只改「观感」，不动锚点/偏移，避免一键预设把用户的定位覆盖掉。 */
-private enum class Preset { MINIMAL, BOLD, PILL }
-
-private fun applyPreset(draft: StyleDraft, preset: Preset): StyleDraft = when (preset) {
-    Preset.MINIMAL -> draft.copy(
-        textSizeSp = 22f,
-        strokeWidth = 0f,
-        weight = 1,
-        bgEnabled = false,
-        showTranslation = false,
-    )
-    Preset.BOLD -> draft.copy(
-        textSizeSp = 24f,
-        strokeWidth = 3f,
-        strokeColor = 0xFF000000.toInt(),
-        weight = 0,
-        bgEnabled = false,
-    )
-    Preset.PILL -> draft.copy(
-        textSizeSp = 22f,
-        strokeWidth = 0f,
-        bgEnabled = true,
-        bgColor = 0xFF000000.toInt(),
-        bgAlpha = 0.45f,
-        bgRadiusDp = 24f,
-    )
-}
-
-@Composable
-private fun PresetChip(label: String, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(10.dp))
-            .background(MiuixTheme.colorScheme.secondaryContainer)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 6.dp),
-    ) {
-        Text(label, fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurface)
-    }
-}
-
 /** 配置导出格式：带版本号，方便以后兼容旧文件。 */
 private const val STYLE_JSON_VERSION = 1
 
@@ -832,9 +753,10 @@ private fun StylePreview(draft: StyleDraft) {
                     modifier = Modifier.padding(bottom = 4.dp),
                 )
             }
-            if (draft.strokeWidth > 0.5f) {
+            if (draft.strokeWidth > 0.05f) {
                 // Compose 没有文字描边 API：用 8 向偏移的同字副本模拟。
-                val sw = draft.strokeWidth.coerceIn(0.5f, 6f)
+                // 偏移量就是「描边在字外多厚」，与 Hook 侧的 dp 语义一致。
+                val sw = draft.strokeWidth.coerceIn(0.5f, LyricStyle.STROKE_MAX_DP)
                 Box {
                     listOf(
                         -sw to 0f, sw to 0f, 0f to -sw, 0f to sw,

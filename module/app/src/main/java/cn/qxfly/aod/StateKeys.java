@@ -129,7 +129,7 @@ public final class StateKeys {
     public static final String STYLE_TEXT_COLOR = "styleTextColor";
     /** Font family name, or null for the system default. */
     public static final String STYLE_TYPEFACE = "styleTypeface";
-    /** Stroke width in px; 0 disables the outline. */
+    /** Outline thickness in dp, outside the glyph (0 disables it). */
     public static final String STYLE_STROKE_WIDTH = "styleStrokeWidth";
     /** ARGB stroke colour. */
     public static final String STYLE_STROKE_COLOR = "styleStrokeColor";

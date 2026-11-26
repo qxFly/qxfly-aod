@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import cn.qxfly.aod.LyricStyle
 import cn.qxfly.aod.R
 import cn.qxfly.aod.ui.base.BackButton
 import cn.qxfly.aod.ui.base.MiuixPage
@@ -138,15 +139,24 @@ internal fun StyleTextPage(bottomPadding: Dp) {
         SliderRow(
             label = stringResource(R.string.style_stroke_width),
             value = draft.strokeWidth,
-            range = 0f..6f,
+            range = 0f..LyricStyle.STROKE_MAX_DP,
             defaultValue = 0f,
+            format = { String.format(java.util.Locale.US, "%.1f dp", it) },
+            toInput = { String.format(java.util.Locale.US, "%.1f", it) },
+            fromInput = { it.trim().removeSuffix("dp").trim().toFloatOrNull() },
             onChange = { StyleDraftStore.draft = StyleDraftStore.draft.copy(strokeWidth = it) },
         )
-        if (draft.strokeWidth > 0.5f) {
+        Text(
+            text = stringResource(R.string.style_stroke_hint),
+            fontSize = 11.sp,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            modifier = Modifier.padding(bottom = 2.dp),
+        )
+        if (draft.strokeWidth > 0.05f) {
             Text(
                 text = stringResource(R.string.style_stroke_color),
                 fontSize = 13.sp,
-                modifier = Modifier.padding(top = 2.dp, bottom = 4.dp),
+                modifier = Modifier.padding(top = 8.dp, bottom = 4.dp),
             )
             ColorSwatches(
                 selected = draft.strokeColor,

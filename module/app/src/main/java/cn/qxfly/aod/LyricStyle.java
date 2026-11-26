@@ -19,8 +19,29 @@ public final class LyricStyle {
     public int textColor = Color.WHITE;
     @Nullable
     public String typefaceName;
+    /**
+     * Outline thickness in dp, measured OUTSIDE the glyph edge (0 = no outline).
+     *
+     * <p>The hook converts it to px with the display density and the draw pass
+     * doubles it for the centred stroke, so the visible outline is exactly this
+     * thick. Older builds stored raw px (0..6); the clamp keeps those loadable.
+     */
     public float strokeWidth;
+    public static final float STROKE_MAX_DP = 4f;
     public int strokeColor = Color.BLACK;
+
+    /** Clamps an outline width into the supported range. */
+    public static float clampStrokeDp(float dp) {
+        if (Float.isNaN(dp)) {
+            return 0f;
+        }
+        return Math.max(0f, Math.min(STROKE_MAX_DP, dp));
+    }
+
+    /** This style's outline thickness in dp, already clamped. */
+    public float resolvedStrokeDp() {
+        return clampStrokeDp(strokeWidth);
+    }
     /** 0 bold, 1 normal, 2 light. */
     public int weight;
     public boolean italic;

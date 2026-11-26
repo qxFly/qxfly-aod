@@ -11,11 +11,25 @@ import androidx.annotation.NonNull;
  * A TextView that can draw an outline behind the glyphs.
  *
  * <p>Outlined lyrics are one of the appearance options the original module
- * offered; Android has no stroke attribute for text, so it is drawn twice -
- * once as a stroked pass, then the normal fill on top.
+ * offered; Android has no stroke attribute for text, so the outline is drawn
+ * as a stroked pass underneath the normal fill.
+ *
+ * <p>Two details make the outline look right:
+ * <ul>
+ *   <li><b>Width means "how far the outline sticks out"</b>. Skia's
+ *       {@link Paint.Style#STROKE} is centred on the glyph outline, so half of
+ *       the stroke hides under the fill. The stroke pass therefore uses
+ *       {@code 2 × width}, which leaves exactly {@code width} visible on the
+ *       outside.</li>
+ *   <li><b>The stroked pass copies the live {@link android.text.TextPaint}</b>
+ *       (typeface, size, letter spacing, scaleX/skewX, locale, font features,
+ *       hinting, fake bold) instead of setting three fields by hand; otherwise
+ *       the outline drifts away from the fill glyphs and looks doubled.</li>
+ * </ul>
  */
 public final class LyricTextView extends TextView {
 
+    /** Stroke pass; its state is refreshed from {@link #getPaint()} on every draw. */
     @NonNull
     private final Paint mStrokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
@@ -23,7 +37,10 @@ public final class LyricTextView extends TextView {
     @NonNull
     private final Paint mBgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
+    /** Outline width in px, measured OUTSIDE the glyph outline. */
     private float mStrokeWidth;
+
+    private int mStrokeColor = android.graphics.Color.BLACK;
 
     private boolean mBgEnabled;
 
@@ -36,18 +53,24 @@ public final class LyricTextView extends TextView {
 
     public LyricTextView(@NonNull Context context) {
         super(context);
-        mStrokePaint.setStyle(Paint.Style.STROKE);
-        mStrokePaint.setStrokeJoin(Paint.Join.ROUND);
         mBgPaint.setStyle(Paint.Style.FILL);
     }
 
-    /** @param width stroke width in px; 0 disables the outline */
+    /**
+     * @param width outline width in px, outside the glyph (0 disables it);
+     *              callers convert the style's dp value with the display density
+     */
     public void setStroke(float width, int color) {
         mStrokeWidth = Math.max(0f, width);
-        mStrokePaint.setStrokeWidth(mStrokeWidth);
-        mStrokePaint.setColor(color);
+        mStrokeColor = color;
         invalidate();
     }
+
+    /** True when the outline is currently drawn (used by diagnostics). */
+    public boolean hasStroke() {
+        return mStrokeWidth > 0f;
+    }
+
 
     /**
      * Rounded background pill behind each line. When enabled the view gets
@@ -145,22 +168,37 @@ public final class LyricTextView extends TextView {
             }
         }
         if (mStrokeWidth > 0f) {
-            mStrokePaint.setTypeface(getTypeface());
-            mStrokePaint.setTextSize(getTextSize());
-            // Keep the stroke pass aligned with the fill pass.
-            mStrokePaint.setTextAlign(getPaint().getTextAlign());
-            // Draw per wrapped line so long lyrics at a large font size get a
-            // stroke on every line, not just the first one. Coordinates are
-            // layout-relative: the fill pass (super.onDraw) translates the
-            // canvas by the paddings, so apply them manually here.
             android.text.Layout layout = getLayout();
-            if (layout != null) {
+            if (layout != null && layout.getLineCount() > 0) {
+                // Copy the live TextPaint so the outline follows the exact same
+                // glyph metrics as the fill pass (letter spacing, scaleX/skew,
+                // locale, font features, fake bold...). Setting only typeface +
+                // size made the outline drift and look doubled.
+                mStrokePaint.set(getPaint());
+                mStrokePaint.setStyle(Paint.Style.STROKE);
+                // Centred stroke: ask for twice the width so exactly mStrokeWidth
+                // ends up visible outside the glyphs (the inner half hides
+                // under the fill pass).
+                mStrokePaint.setStrokeWidth(mStrokeWidth * 2f);
+                mStrokePaint.setStrokeJoin(Paint.Join.ROUND);
+                mStrokePaint.setStrokeCap(Paint.Cap.ROUND);
+                mStrokePaint.setColor(mStrokeColor);
+                // Draw per wrapped line at the layout's own line boxes, so long
+                // lyrics at a large font size get an outline on every line.
+                // ALIGN_LEFT + getLineLeft() is the position the layout already
+                // resolved; keeping the fill paint's align would shift lines.
+                mStrokePaint.setTextAlign(Paint.Align.LEFT);
                 float dx = getTotalPaddingLeft();
                 float dy = getExtendedPaddingTop();
                 for (int i = 0; i < layout.getLineCount(); i++) {
-                    canvas.drawText(layout.getText(),
-                            layout.getLineStart(i), layout.getLineEnd(i),
-                            dx + layout.getLineLeft(i), dy + layout.getLineBaseline(i),
+                    int start = layout.getLineStart(i);
+                    int end = layout.getLineEnd(i);
+                    if (end <= start) {
+                        continue;
+                    }
+                    canvas.drawText(layout.getText(), start, end,
+                            dx + layout.getLineLeft(i),
+                            dy + layout.getLineBaseline(i),
                             mStrokePaint);
                 }
             }
