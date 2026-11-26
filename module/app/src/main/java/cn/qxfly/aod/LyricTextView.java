@@ -39,6 +39,10 @@ public final class LyricTextView extends TextView {
 
     private int mStrokeColor = android.graphics.Color.BLACK;
 
+    /** Paint used only to tint the outline layer when it is composited. */
+    @NonNull
+    private final Paint mStrokeLayerPaint = new Paint();
+
     private boolean mBgEnabled;
 
     /** Pill margin around the text, in px; mirrors the extra padding. */
@@ -173,17 +177,22 @@ public final class LyricTextView extends TextView {
             android.text.TextPaint tp = getPaint();
             Paint.Style oldStyle = tp.getStyle();
             float oldStrokeWidth = tp.getStrokeWidth();
-            int oldColor = tp.getColor();
             // 居中描边：给到两倍宽度，填充盖掉内侧一半后，外侧正好是设定厚度。
             tp.setStyle(Paint.Style.STROKE);
             tp.setStrokeWidth(mStrokeWidth * 2f);
             tp.setStrokeJoin(Paint.Join.ROUND);
             tp.setStrokeCap(Paint.Cap.ROUND);
-            tp.setColor(mStrokeColor);
+            // 颜色：每行文字都带 ForegroundColorSpan（歌名/译文/进度是淡色），
+            // 而 Span 的 updateDrawState 会重设画笔——直接 setColor 或
+            // setColorFilter 都只有第一行生效（多行实测：只有首行被染色）。
+            // 这里把整层内容画进离屏层，合成时用它自己的颜色滤镜统一染色。
+            mStrokeLayerPaint.setColorFilter(new android.graphics.PorterDuffColorFilter(
+                    mStrokeColor, android.graphics.PorterDuff.Mode.SRC_IN));
+            int layer = canvas.saveLayer(0f, 0f, getWidth(), getHeight(), mStrokeLayerPaint);
             super.onDraw(canvas);
+            canvas.restoreToCount(layer);
             tp.setStyle(oldStyle);
             tp.setStrokeWidth(oldStrokeWidth);
-            tp.setColor(oldColor);
         }
         super.onDraw(canvas);
     }
