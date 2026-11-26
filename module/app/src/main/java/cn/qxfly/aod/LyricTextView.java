@@ -21,17 +21,14 @@ import androidx.annotation.NonNull;
  *       the stroke hides under the fill. The stroke pass therefore uses
  *       {@code 2 × width}, which leaves exactly {@code width} visible on the
  *       outside.</li>
- *   <li><b>The stroked pass copies the live {@link android.text.TextPaint}</b>
- *       (typeface, size, letter spacing, scaleX/skewX, locale, font features,
- *       hinting, fake bold) instead of setting three fields by hand; otherwise
- *       the outline drifts away from the fill glyphs and looks doubled.</li>
+ *   <li><b>The outline is drawn by TextView itself</b>, with the view's own
+ *       paint temporarily switched to STROKE. Hand-rolling
+ *       {@code canvas.drawText()} per layout line drifts away from the fill
+ *       pass for centred text and stacked spans (track / translation /
+ *       progress), which showed up as a ghost copy of every line.</li>
  * </ul>
  */
 public final class LyricTextView extends TextView {
-
-    /** Stroke pass; its state is refreshed from {@link #getPaint()} on every draw. */
-    @NonNull
-    private final Paint mStrokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
     /** Background panel behind all lyric lines (optional, off by default). */
     @NonNull
@@ -168,40 +165,25 @@ public final class LyricTextView extends TextView {
             }
         }
         if (mStrokeWidth > 0f) {
-            android.text.Layout layout = getLayout();
-            if (layout != null && layout.getLineCount() > 0) {
-                // Copy the live TextPaint so the outline follows the exact same
-                // glyph metrics as the fill pass (letter spacing, scaleX/skew,
-                // locale, font features, fake bold...). Setting only typeface +
-                // size made the outline drift and look doubled.
-                mStrokePaint.set(getPaint());
-                mStrokePaint.setStyle(Paint.Style.STROKE);
-                // Centred stroke: ask for twice the width so exactly mStrokeWidth
-                // ends up visible outside the glyphs (the inner half hides
-                // under the fill pass).
-                mStrokePaint.setStrokeWidth(mStrokeWidth * 2f);
-                mStrokePaint.setStrokeJoin(Paint.Join.ROUND);
-                mStrokePaint.setStrokeCap(Paint.Cap.ROUND);
-                mStrokePaint.setColor(mStrokeColor);
-                // Draw per wrapped line at the layout's own line boxes, so long
-                // lyrics at a large font size get an outline on every line.
-                // ALIGN_LEFT + getLineLeft() is the position the layout already
-                // resolved; keeping the fill paint's align would shift lines.
-                mStrokePaint.setTextAlign(Paint.Align.LEFT);
-                float dx = getTotalPaddingLeft();
-                float dy = getExtendedPaddingTop();
-                for (int i = 0; i < layout.getLineCount(); i++) {
-                    int start = layout.getLineStart(i);
-                    int end = layout.getLineEnd(i);
-                    if (end <= start) {
-                        continue;
-                    }
-                    canvas.drawText(layout.getText(), start, end,
-                            dx + layout.getLineLeft(i),
-                            dy + layout.getLineBaseline(i),
-                            mStrokePaint);
-                }
-            }
+            // 描边层：把「视图自己的画笔」临时改成描边样式，然后交给
+            // TextView 自己画一遍。这样位置、行内对齐（居中/靠边）、多行、
+            // 各种 Span 字号、letterSpacing、scaleX 全部由 TextView/Layout 决定，
+            // 与填充层逐像素重合——之前自己按 getLineLeft() 逐行 drawText，
+            // 居中文本和多行堆叠（歌名/译文/进度）会与填充错开，看着像重影。
+            android.text.TextPaint tp = getPaint();
+            Paint.Style oldStyle = tp.getStyle();
+            float oldStrokeWidth = tp.getStrokeWidth();
+            int oldColor = tp.getColor();
+            // 居中描边：给到两倍宽度，填充盖掉内侧一半后，外侧正好是设定厚度。
+            tp.setStyle(Paint.Style.STROKE);
+            tp.setStrokeWidth(mStrokeWidth * 2f);
+            tp.setStrokeJoin(Paint.Join.ROUND);
+            tp.setStrokeCap(Paint.Cap.ROUND);
+            tp.setColor(mStrokeColor);
+            super.onDraw(canvas);
+            tp.setStyle(oldStyle);
+            tp.setStrokeWidth(oldStrokeWidth);
+            tp.setColor(oldColor);
         }
         super.onDraw(canvas);
     }
