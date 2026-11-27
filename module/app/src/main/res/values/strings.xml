@@ -12,9 +12,18 @@
     <string name="cd_back">返回</string>
     <string name="cd_settings">设置</string>
     <string name="cd_refresh">刷新状态</string>
+    <string name="cd_restart_scope">重启作用域应用</string>
     <string name="state_loading">读取中…</string>
     <string name="state_unknown">未知</string>
     <string name="state_no_feed">暂无投喂记录</string>
+
+    <!-- 主页：重启作用域应用 -->
+    <string name="restart_scope_title">重启作用域应用</string>
+    <string name="restart_scope_hint">勾选要重启的进程；重启后 LSPosed 会在这些应用里重新加载本模块。系统界面重启时息屏会短暂消失。</string>
+    <string name="restart_scope_empty">未找到作用域应用：请先在 LSPosed 里勾选要生效的应用</string>
+    <string name="restart_scope_refresh">仅刷新状态</string>
+    <string name="restart_scope_confirm">重启选中</string>
+    <string name="restart_scope_sent">已请求重启 %1$d 个应用</string>
 
     <!-- 设置页：配色模式 -->
     <string name="color_mode_system">跟随系统</string>
@@ -82,7 +91,7 @@
     <string name="home_link_res_summary">SuperLyric 歌词服务与配置说明</string>
 
     <!-- 外观页 -->
-    <string name="style_page_subtitle">预览、分类设置与保存</string>
+    <string name="style_page_subtitle">分类设置与保存</string>
 
     <!-- 设置页 -->
     <string name="settings_subtitle">App 界面主题</string>
@@ -102,17 +111,17 @@
     <string name="style_stroke_color">描边颜色</string>
     <string name="style_stroke_hint">数值是字外厚度（dp）；越大越像贴纸边框</string>
     <string name="style_offset">垂直位置</string>
-    <string name="style_anchor_section">定位模式</string>
-    <string name="style_anchor_mode">跟随组件定位</string>
-    <string name="style_anchor_mode_summary">对齐息屏组件的原始位置，替代百分比偏移</string>
+    <string name="style_position_mode">定位模式</string>
+    <string name="style_position_mode_offset">自定义偏移（百分比）</string>
+    <string name="style_position_mode_anchor">插入息屏组件树（跟随锚点）</string>
+    <string name="style_position_mode_offset_hint">按屏幕高度的百分比摆放，拖动下面的滑条即可移动</string>
+    <string name="style_position_mode_anchor_hint">歌词插进组件布局流里，换锚点组件即可换位置</string>
     <string name="style_anchor_component">锚点组件</string>
     <string name="style_anchor_position">放置位置</string>
     <string name="style_anchor_above">组件上方</string>
     <string name="style_anchor_below">组件下方</string>
     <string name="style_anchor_gap">间距（px）</string>
     <string name="style_anchor_empty">尚未获取息屏组件清单：点亮息屏（AOD 渲染中）后回到此页</string>
-    <string name="style_tree_insert">插入组件树</string>
-    <string name="style_tree_insert_summary">把歌词按锚点在组件树中的槽位插入布局流，与息屏组件一起排布（不再用偏移量）</string>
     <string name="style_align">对齐方式</string>
     <string name="style_align_center">居中（与组件一致）</string>
     <string name="style_align_left">靠左</string>
@@ -217,7 +226,7 @@
     <string name="style_section_text">文字</string>
     <string name="style_section_bg">背景</string>
     <string name="style_group_layout">位置与对齐</string>
-    <string name="style_group_layout_summary">对齐方式、垂直位置与组件锚点</string>
+    <string name="style_group_layout_summary">对齐方式、定位模式与锚点</string>
     <string name="style_group_layout_value">%1$s · 垂直 %2$d%%</string>
     <string name="style_group_layout_anchor">跟随「%1$s」</string>
     <string name="style_group_layout_immersive">沉浸九宫格：%1$s</string>

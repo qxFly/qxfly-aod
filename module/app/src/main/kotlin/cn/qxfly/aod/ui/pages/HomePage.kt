@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
+import android.widget.Toast
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -23,6 +25,9 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -40,18 +45,23 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import cn.qxfly.aod.R
+import cn.qxfly.aod.StateKeys
 import cn.qxfly.aod.ui.core.CardsData
 import cn.qxfly.aod.ui.core.LocalUiHub
+import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CardDefaults
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Link
 import top.yukonga.miuix.kmp.icon.extended.Refresh
+import top.yukonga.miuix.kmp.preference.CheckboxPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 private const val GITHUB_URL = "https://github.com/qxFly/qxfly-aod"
@@ -68,7 +78,7 @@ private val WarningBackgroundDark = Color(0xFF3A2D12)
 private val WarningContentDark = Color(0xFFFFD978)
 
 /**
- * 主页：对照参考图重做 —— 大标题 + 右上刷新、左大右两窄的状态 / 数字卡、
+ * 主页：对照参考图重做 —— 大标题 + 右上重启用、左大右两窄的状态 / 数字卡、
  * 警示横幅、信息卡、链接卡。歌词外观已拆到「外观」标签页。
  */
 @Composable
@@ -78,6 +88,8 @@ fun HomePage(bottomPadding: Dp) {
     val context = LocalContext.current
     val versionName = rememberVersionName(context)
     val versionDisplay = rememberVersionDisplay(context)
+    var showRestartDialog by remember { mutableStateOf(false) }
+    val scopeApps = remember(context) { loadScopeApps(context) }
 
     LazyColumn(
         modifier = Modifier
@@ -94,7 +106,7 @@ fun HomePage(bottomPadding: Dp) {
         item {
             HomeHeader(
                 title = stringResource(R.string.app_name),
-                onRefresh = { data.refresh() },
+                onRestart = { showRestartDialog = true },
             )
         }
 
@@ -115,11 +127,28 @@ fun HomePage(bottomPadding: Dp) {
 
         item { Spacer(Modifier.height(4.dp)) }
     }
+
+    if (showRestartDialog) {
+        RestartScopeDialog(
+            apps = scopeApps,
+            onDismiss = { showRestartDialog = false },
+            onRefresh = { data.refresh() },
+            onConfirm = { packages ->
+                requestScopeRestart(context, packages)
+                Toast.makeText(
+                    context,
+                    context.getString(R.string.restart_scope_sent, packages.size),
+                    Toast.LENGTH_SHORT,
+                ).show()
+                showRestartDialog = false
+            },
+        )
+    }
 }
 
-/** 顶部：右侧刷新按钮 + 下方大标题（参考图里图标在标题上方）。 */
+/** 顶部：右侧重启作用域按钮 + 下方大标题（参考图里图标在标题上方）。 */
 @Composable
-private fun HomeHeader(title: String, onRefresh: () -> Unit) {
+private fun HomeHeader(title: String, onRestart: () -> Unit) {
     Column(Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier
@@ -128,10 +157,10 @@ private fun HomeHeader(title: String, onRefresh: () -> Unit) {
             horizontalArrangement = Arrangement.End,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(onClick = onRefresh) {
+            IconButton(onClick = onRestart) {
                 Icon(
                     imageVector = MiuixIcons.Refresh,
-                    contentDescription = stringResource(R.string.cd_refresh),
+                    contentDescription = stringResource(R.string.cd_restart_scope),
                 )
             }
         }
@@ -430,4 +459,131 @@ private fun LinkRow(
 
 private fun Context.openUrl(url: String) {
     runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+}
+
+// ── 重启作用域应用 ────────────────────────────────────────────────────
+
+/** 一个可重启的作用域应用。 */
+private data class ScopeApp(val pkg: String, val label: String)
+
+/** 模块固定 hook 的两个包；scope.list 读取失败时至少还能列出它们。 */
+private val KNOWN_SCOPE_PACKAGES = listOf("com.android.systemui", "com.miui.aod")
+
+/**
+ * 作用域应用清单：先读 APK 里打包的 `META-INF/xposed/scope.list`（构建时的
+ * 默认作用域，与 LSPosed 里勾选的项一致），再补上两个固定 hook 的包。
+ */
+private fun loadScopeApps(context: Context): List<ScopeApp> {
+    val declared = runCatching {
+        context.classLoader?.getResourceAsStream("META-INF/xposed/scope.list")
+            ?.bufferedReader()
+            ?.use { reader -> reader.readLines() }
+    }.getOrNull().orEmpty()
+        .map { it.trim() }
+        .filter { it.isNotEmpty() && !it.startsWith("#") }
+    val packages = (KNOWN_SCOPE_PACKAGES + declared).distinct()
+    val pm = context.packageManager
+    return packages.map { pkg ->
+        val label = runCatching {
+            pm.getApplicationInfo(pkg, 0).loadLabel(pm).toString()
+        }.getOrDefault(pkg)
+        ScopeApp(pkg, label)
+    }
+}
+
+/**
+ * 写一条重启请求到 Provider，由 hook 进程（SystemUI，持有
+ * FORCE_STOP_PACKAGES）执行真正的 kill：普通应用没有权限停掉别的包。
+ */
+private fun requestScopeRestart(context: Context, packages: List<String>) {
+    if (packages.isEmpty()) {
+        return
+    }
+    val payload = Bundle().apply {
+        putString(StateKeys.TYPE, StateKeys.TYPE_RESTART)
+        putLong(StateKeys.RESTART_AT, System.currentTimeMillis())
+        putString(StateKeys.RESTART_PACKAGES, packages.joinToString(","))
+    }
+    runCatching {
+        context.contentResolver.call(
+            StateKeys.stateUri(),
+            StateKeys.METHOD_UPDATE,
+            null,
+            payload,
+        )
+    }
+}
+
+/** 重启作用域应用：勾选要重启的进程，确认后交给 hook 执行。 */
+@Composable
+private fun RestartScopeDialog(
+    apps: List<ScopeApp>,
+    onDismiss: () -> Unit,
+    onRefresh: () -> Unit,
+    onConfirm: (List<String>) -> Unit,
+) {
+    var selected by remember(apps) { mutableStateOf(apps.map { it.pkg }.toSet()) }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            insideMargin = PaddingValues(16.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.restart_scope_title),
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Medium,
+            )
+            Text(
+                text = stringResource(R.string.restart_scope_hint),
+                fontSize = 11.sp,
+                lineHeight = 16.sp,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                modifier = Modifier.padding(top = 4.dp, bottom = 6.dp),
+            )
+            if (apps.isEmpty()) {
+                Text(
+                    text = stringResource(R.string.restart_scope_empty),
+                    fontSize = 12.sp,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    modifier = Modifier.padding(vertical = 8.dp),
+                )
+            } else {
+                apps.forEach { app ->
+                    CheckboxPreference(
+                        title = app.label,
+                        summary = app.pkg,
+                        checked = app.pkg in selected,
+                        onCheckedChange = { checked ->
+                            selected = if (checked) {
+                                selected + app.pkg
+                            } else {
+                                selected - app.pkg
+                            }
+                        },
+                    )
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                TextButton(
+                    text = stringResource(R.string.restart_scope_refresh),
+                    onClick = {
+                        onRefresh()
+                        onDismiss()
+                    },
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(
+                    text = stringResource(R.string.restart_scope_confirm),
+                    onClick = { onConfirm(selected.toList()) },
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.textButtonColorsPrimary(),
+                )
+            }
+        }
+    }
 }

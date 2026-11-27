@@ -172,6 +172,9 @@ public final class ProviderLrcSource {
                     AodOverlayController.setStyle(style);
                 }
             }
+            // Restart requests from the UI ride in the same snapshot; handled
+            // here because this is the only place that already fetched it.
+            ScopeRestarter.maybeRestart(context, snap);
         } catch (Throwable t) {
             AodLog.w("provider refresh failed: " + t.getClass().getSimpleName()
                     + ": " + t.getMessage());

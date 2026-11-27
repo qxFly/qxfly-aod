@@ -171,6 +171,16 @@ public final class AodStateProvider extends ContentProvider {
             for (String key : StateKeys.STYLE_KEYS) {
                 copyIfPresent(next, in, key);
             }
+        } else if (StateKeys.TYPE_RESTART.equals(type)) {
+            // Restart command / ack: kept in the snapshot only so the hook
+            // processes can see it on their next poll. Never persisted - a
+            // stale request would restart apps every time the provider reloads
+            // its state.
+            next.putLong(StateKeys.RESTART_AT, in.getLong(StateKeys.RESTART_AT, 0L));
+            next.putString(StateKeys.RESTART_PACKAGES, in.getString(StateKeys.RESTART_PACKAGES));
+            next.putLong(StateKeys.RESTART_DONE_AT,
+                    in.getLong(StateKeys.RESTART_DONE_AT, 0L));
+            durable = false;
         } else if (StateKeys.TYPE_DIAG.equals(type)) {
             // Hook -> app diagnostics answer: the log tail of the process that
             // served the request, plus its build identity.
@@ -195,8 +205,17 @@ public final class AodStateProvider extends ContentProvider {
         }
     }
 
-    /** True for keys from older schemas that nothing reads any more. */
-    private static boolean isObsolete(@NonNull String key) {
+    /**
+     * One-shot values that must never reach the snapshot file: a restart
+     * command replayed after a process restart would kill apps again.
+     */
+    private static boolean isRuntimeOnly(@NonNull String key) {
+        return StateKeys.RESTART_AT.equals(key)
+                || StateKeys.RESTART_PACKAGES.equals(key)
+                || StateKeys.RESTART_DONE_AT.equals(key);
+    }
+
+    /** True for keys from older schemas that nothing reads any more. */    private static boolean isObsolete(@NonNull String key) {
         for (String dead : StateKeys.OBSOLETE_KEYS) {
             if (dead.equals(key)) {
                 return true;
@@ -218,6 +237,11 @@ public final class AodStateProvider extends ContentProvider {
             Bundle snap = sSnapshot;
             StringBuilder sb = new StringBuilder();
             for (String key : snap.keySet()) {
+                if (isRuntimeOnly(key)) {
+                    // Restart commands/acks are one-shot: persisting them would
+                    // replay an old request after the provider process restarts.
+                    continue;
+                }
                 Object v = snap.get(key);
                 if (v instanceof String) {
                     sb.append("S|").append(key).append('|')

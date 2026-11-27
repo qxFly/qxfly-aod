@@ -126,6 +126,10 @@ internal fun StyleTextPage(bottomPadding: Dp) {
     ) {
         val draft = StyleDraftStore.draft
 
+        // 预览放在本页顶部：改字号 / 颜色 / 描边 / 字体时立刻看到效果。
+        StylePreview(draft)
+        Spacer(Modifier.height(14.dp))
+
         // ── 文字 ──
         SectionHeader(stringResource(R.string.style_section_text), first = true)
         SliderRow(
@@ -425,42 +429,56 @@ internal fun StyleLayoutPage(bottomPadding: Dp) {
             },
         )
 
-        val anchored = !draft.anchorId.isNullOrEmpty()
+        // 定位模式只有两种（用户要求）：插入组件树靠锚点，自定义偏移靠百分比。
+        val anchored = draft.treeInsert || !draft.anchorId.isNullOrEmpty()
+        Spacer(Modifier.height(6.dp))
+        OverlayDropdownPreference(
+            title = stringResource(R.string.style_position_mode),
+            items = listOf(
+                stringResource(R.string.style_position_mode_offset),
+                stringResource(R.string.style_position_mode_anchor),
+            ),
+            selectedIndex = if (anchored) 1 else 0,
+            onSelectedIndexChange = { index ->
+                StyleDraftStore.draft = if (index == 1) {
+                    StyleDraftStore.draft.copy(
+                        treeInsert = true,
+                        anchorId = draft.anchorId?.takeIf { it.isNotEmpty() }
+                            ?: components.firstOrNull()?.id
+                            ?: "clock",
+                    )
+                } else {
+                    StyleDraftStore.draft.copy(anchorId = null, treeInsert = false)
+                }
+            },
+        )
+
         if (!anchored) {
+            Text(
+                text = stringResource(R.string.style_position_mode_offset_hint),
+                fontSize = 11.sp,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                modifier = Modifier.padding(bottom = 4.dp),
+            )
             SliderRow(
                 label = stringResource(R.string.style_offset),
                 value = draft.offsetRatio,
                 range = 0f..0.9f,
                 defaultValue = 0.42f,
-                onChange = { StyleDraftStore.draft = draft.copy(offsetRatio = it) },
+                format = { "${(it * 100).toInt()}%" },
+                toInput = { Math.round(it * 100).toString() },
+                fromInput = { it.trim().removeSuffix("%").trim().toFloatOrNull()?.div(100f) },
+                onChange = { StyleDraftStore.draft = StyleDraftStore.draft.copy(offsetRatio = it) },
             )
-        }
-
-        Spacer(Modifier.height(10.dp))
-        Text(
-            text = stringResource(R.string.style_anchor_section),
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Medium,
-        )
-        Spacer(Modifier.height(6.dp))
-        SwitchPreference(
-            title = stringResource(R.string.style_anchor_mode),
-            summary = stringResource(R.string.style_anchor_mode_summary),
-            checked = anchored,
-            enabled = components.isNotEmpty() || anchored,
-            onCheckedChange = { enabled ->
-                StyleDraftStore.draft = StyleDraftStore.draft.copy(
-                    anchorId = if (enabled) {
-                        components.firstOrNull()?.id ?: draft.anchorId
-                    } else {
-                        null
-                    },
-                )
-            },
-        )
-        if (!anchored) {
             return@StyleSubPage
         }
+
+        Text(
+            text = stringResource(R.string.style_position_mode_anchor_hint),
+            fontSize = 11.sp,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            modifier = Modifier.padding(bottom = 4.dp),
+        )
         if (components.isEmpty()) {
             Text(
                 text = stringResource(R.string.style_anchor_empty),
@@ -497,15 +515,7 @@ internal fun StyleLayoutPage(bottomPadding: Dp) {
             range = 0f..80f,
             defaultValue = 12f,
             format = { "${it.toInt()}" },
-            onChange = { StyleDraftStore.draft = draft.copy(anchorGap = it) },
-        )
-        SwitchPreference(
-            title = stringResource(R.string.style_tree_insert),
-            summary = stringResource(R.string.style_tree_insert_summary),
-            checked = draft.treeInsert,
-            onCheckedChange = { enabled ->
-                StyleDraftStore.draft = StyleDraftStore.draft.copy(treeInsert = enabled)
-            },
+            onChange = { StyleDraftStore.draft = StyleDraftStore.draft.copy(anchorGap = it) },
         )
     }
 }

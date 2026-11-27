@@ -46,6 +46,24 @@ public final class StateKeys {
     public static final String TYPE_STATUS = "status";
     public static final String TYPE_LYRIC = "lyric";
     public static final String TYPE_STYLE = "style";
+    /**
+     * UI -> hook: restart (kill) the listed scope packages so LSPosed reloads
+     * the freshly installed module inside them. Executed by the hook because a
+     * normal app may not stop other packages (SystemUI holds
+     * FORCE_STOP_PACKAGES).
+     */
+    public static final String TYPE_RESTART = "restart";
+    /** Request stamp (ms); the hook acts once per distinct value. */
+    public static final String RESTART_AT = "restartAt";
+    /** Comma separated package names to restart. */
+    public static final String RESTART_PACKAGES = "restartPackages";
+    /**
+     * Hook -> provider ack: the request stamped with this value was already
+     * executed. Needed because the executing process kills ITSELF: after the
+     * respawn its in-memory "last handled" value is gone, and without the ack
+     * it would see the (still present) request again and restart in a loop.
+     */
+    public static final String RESTART_DONE_AT = "restartDoneAt";
     /** Hook -> app: enumerated AOD components with bounds (anchor picker data). */
     public static final String TYPE_COMPONENTS = "components";    /** "id|class|bounds" lines, one per candidate component. */
     public static final String COMPONENTS_LIST = "componentsList";

@@ -234,27 +234,6 @@ internal object StyleDraftStore {
 }
 
 /**
- * 外观主页第一张卡片：所见即所得预览。
- *
- * 只放「看效果」——所有细项都收进下面的分类二级页，避免一个页面堆三十多个控件。
- * （预设一键换风格已按用户要求移除：观感完全由二级页里的具体参数决定。）
- */
-@Composable
-internal fun StylePreviewCard(data: ModuleData) {
-    StyleDraftStore.ensureLoaded(data)
-    val draft = StyleDraftStore.draft
-
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp),
-        insideMargin = PaddingValues(16.dp),
-    ) {
-        StylePreview(draft)
-    }
-}
-
-/**
  * 3 个功能分类的入口卡：主页只显示「当前值摘要」，点进去才是二级页。
  *
  * 分组原则：按用户调节时的目的分——文字/背景/附加显示、放在哪里、息屏沉浸。
@@ -701,9 +680,12 @@ internal fun SelectableChip(
 /**
  * 歌词效果预览：按草稿的字号 / 颜色 / 字体 / 粗细 / 描边 / 对齐
  * 在深色底上渲染一句样例，即所见即所得。
+ *
+ * 放在「文字、背景与附加信息」二级页顶部（用户要求：预览跟着样式修改走，
+ * 不再占外观主页的位置）。
  */
 @Composable
-private fun StylePreview(draft: StyleDraft) {
+internal fun StylePreview(draft: StyleDraft) {
     val fontFamily = when (draft.typefaceName) {
         "serif" -> FontFamily.Serif
         "monospace" -> FontFamily.Monospace
@@ -917,29 +899,44 @@ internal fun ColorPickerDialog(initial: Int, onDismiss: () -> Unit, onConfirm: (
     }
 }
 
-/** 调色板行：预置色 + 自定义入口（带选中描边）。 */
+/**
+ * 调色板：预置色（马卡龙）按 7 个一行折行 + 自定义入口（带选中描边）。
+ *
+ * 折行而不是一行铺满：14 个色块 + 自定义按钮一行放不下，横向滑动的色带
+ * 也很难点。
+ */
 @Composable
 internal fun ColorSwatches(selected: Int, onPick: (Int) -> Unit, onCustom: () -> Unit) {
-    Row(
+    val rows = StyleColors.chunked(COLOR_SWATCH_PER_ROW)
+    Column(
         Modifier
             .fillMaxWidth()
             .padding(top = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        StyleColors.forEach { argb ->
-            Swatch(
-                color = argb,
-                selected = selected == argb,
-                onClick = { onPick(argb) },
-            )
+        rows.forEachIndexed { index, row ->
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                row.forEach { argb ->
+                    Swatch(
+                        color = argb,
+                        selected = selected == argb,
+                        onClick = { onPick(argb) },
+                    )
+                }
+                if (index == rows.lastIndex) {
+                    Swatch(
+                        color = selected,
+                        selected = StyleColors.none { it == selected },
+                        onClick = onCustom,
+                        label = "+",
+                    )
+                }
+            }
         }
-        Swatch(
-            color = selected,
-            selected = StyleColors.none { it == selected },
-            onClick = onCustom,
-            label = "+",
-        )
     }
 }
 
@@ -1146,15 +1143,32 @@ private fun trimNumber(v: Float): String =
         String.format(java.util.Locale.US, "%.2f", v).trimEnd('0').trimEnd('.')
     }
 
-/** 外观可选颜色（ARGB），与旧界面一致。 */
+/**
+ * 外观可选颜色（ARGB）：白 + 12 种马卡龙色 + 黑。
+ *
+ * 马卡龙色低饱和、高明度：在纯黑的息屏上既醒目又不刺眼，白字/淡色字都压得住。
+ * 黑色留给「背景板」——白字 + 半透明黑底是最常用的组合。
+ * 行宽见 [COLOR_SWATCH_PER_ROW]；新增颜色只要往这个列表里加即可。
+ */
 internal val StyleColors = listOf(
-    0xFFFFFFFF.toInt(),
-    0xFF7D9BFF.toInt(),
-    0xFF6DD58C.toInt(),
-    0xFFF2C55C.toInt(),
-    0xFFF2857C.toInt(),
-    0xFFE8C8FF.toInt(),
+    0xFFFFFFFF.toInt(), // 白
+    0xFFFFB3BA.toInt(), // 马卡龙粉
+    0xFFFFC8DD.toInt(), // 樱花粉
+    0xFFFFD8B1.toInt(), // 蜜桃橙
+    0xFFFFF3B0.toInt(), // 柠檬黄
+    0xFFD9F5B8.toInt(), // 青柠绿
+    0xFFB5EAD7.toInt(), // 薄荷绿
+    0xFFA8E6FF.toInt(), // 天空蓝
+    0xFFB3D4FF.toInt(), // 婴儿蓝
+    0xFFC7CEEA.toInt(), // 雾霾蓝
+    0xFFD9C2F0.toInt(), // 薰衣草紫
+    0xFFE0BBE4.toInt(), // 葡萄紫
+    0xFFFFD1DC.toInt(), // 草莓奶
+    0xFF000000.toInt(), // 黑
 )
+
+/** 色板每行几个色块（14 个色块 = 2 行，正好不挤压 30dp 的点击区）。 */
+internal const val COLOR_SWATCH_PER_ROW = 7
 
 /** 字体族选项：显示名资源 → typeface 名（null = 系统默认）。 */
 internal val StyleFonts = listOf(
