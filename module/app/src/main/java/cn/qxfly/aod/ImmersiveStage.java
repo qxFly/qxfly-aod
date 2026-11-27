@@ -151,13 +151,31 @@ public final class ImmersiveStage {
         } else {
             restoreComponents();
         }
-        if (style != null && style.landscape) {
+        if (style != null && style.resolvedRotMode() == StateKeys.IMMERSIVE_ROT_AUTO) {
             startSensor(root.getContext());
         } else {
             stopSensor();
-            sRotation = 0;
+            sRotation = fixedRotation(style == null ? StateKeys.IMMERSIVE_ROT_NONE
+                    : style.resolvedRotMode());
         }
         layout(tv);
+    }
+
+    /**
+     * Fixed rotation for the manual modes: 0° / 90° / 180° / -90°(=270°).
+     * -90° instead of 270° keeps the canvas math (turned = ±90) simple.
+     */
+    private static int fixedRotation(int mode) {
+        switch (mode) {
+            case StateKeys.IMMERSIVE_ROT_90:
+                return 90;
+            case StateKeys.IMMERSIVE_ROT_180:
+                return 180;
+            case StateKeys.IMMERSIVE_ROT_270:
+                return -90;
+            default:
+                return 0;
+        }
     }
 
     /** True when {@link #sync} would install a stage for this style. */

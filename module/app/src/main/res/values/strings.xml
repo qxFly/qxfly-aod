@@ -216,8 +216,14 @@
     <string name="style_immersive_black">纯黑背景</string>
     <string name="style_immersive_wallpaper">保留息屏壁纸</string>
     <string name="style_immersive_hint">纯黑：整屏铺黑，最省电，换任何主题都生效；保留壁纸：只隐藏组件，背景仍是当前主题</string>
-    <string name="style_landscape">横屏歌词</string>
-    <string name="style_landscape_summary">设备横放时把歌词转 90°，竖屏息屏也能横着读；AOD 自身已横屏时自动不再旋转</string>
+    <string name="style_rot_title">旋转</string>
+    <string name="style_rot_mode">旋转方式</string>
+    <string name="style_rot_auto">自动（重力传感器）</string>
+    <string name="style_rot_none">不旋转（0°）</string>
+    <string name="style_rot_90">90°</string>
+    <string name="style_rot_180">180°（倒置）</string>
+    <string name="style_rot_270">270°（反向 90°）</string>
+    <string name="style_rot_hint">自动：按重力让文字随手机横放转 ±90°，平放/斜靠时保持竖屏；选固定角度后忽略重力传感器，用于纠正支架、平放时转错方向。AOD 窗口自身已横屏时不再额外旋转。</string>
 
     <!-- 外观页分组与二级页 -->
     <string name="style_group_text">文字、背景与附加信息</string>
@@ -231,9 +237,8 @@
     <string name="style_group_layout_anchor">跟随「%1$s」</string>
     <string name="style_group_layout_immersive">沉浸九宫格：%1$s</string>
     <string name="style_group_immersive">息屏沉浸</string>
-    <string name="style_group_immersive_summary">播放时只留歌词：九宫格定位与横屏</string>
-    <string name="style_group_immersive_value">%1$s · %2$s</string>
-    <string name="style_group_immersive_value_landscape">%1$s · %2$s · 横屏</string>
+    <string name="style_group_immersive_summary">播放时只留歌词：九宫格定位与旋转方式</string>
+    <string name="style_group_immersive_value_rot">%1$s · %2$s · %3$s</string>
     <string name="style_summary_bg_on">背景开</string>
     <string name="style_summary_pause_off">暂停即隐藏</string>
     <string name="style_summary_track">歌名</string>

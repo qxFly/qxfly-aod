@@ -128,6 +128,22 @@ public final class LyricStyle {
      */
     public int immersiveGrid = StateKeys.IMMERSIVE_GRID_DEFAULT;
 
+    /**
+     * 沉浸模式的旋转方式：0 自动(重力) / 1 0° / 2 90° / 3 180° / 4 270°。
+     * 旧配置没有这个键时为 {@link StateKeys#IMMERSIVE_ROT_UNSET}（-1），
+     * 由 {@link #resolvedRotMode()} 按 {@link #landscape} 推断。
+     */
+    public int immersiveRot = StateKeys.IMMERSIVE_ROT_UNSET;
+
+    /** 实际生效的旋转档：旧配置按 landscape 开关推断，其余原样（已 clamp）。 */
+    public int resolvedRotMode() {
+        if (immersiveRot >= StateKeys.IMMERSIVE_ROT_MIN
+                && immersiveRot <= StateKeys.IMMERSIVE_ROT_MAX) {
+            return immersiveRot;
+        }
+        return landscape ? StateKeys.IMMERSIVE_ROT_AUTO : StateKeys.IMMERSIVE_ROT_NONE;
+    }
+
     @NonNull
     public static LyricStyle fromBundle(@Nullable android.os.Bundle b) {
         LyricStyle s = new LyricStyle();
@@ -136,7 +152,8 @@ public final class LyricStyle {
         }
         s.textSizeSp = parseFloat(b.getString(StateKeys.STYLE_TEXT_SIZE), s.textSizeSp);
         s.textColor = parseInt(b.getString(StateKeys.STYLE_TEXT_COLOR), s.textColor);
-        s.typefaceName = b.getString(StateKeys.STYLE_TYPEFACE);
+        String tf = b.getString(StateKeys.STYLE_TYPEFACE);
+        s.typefaceName = tf == null || tf.isEmpty() ? null : tf;
         s.strokeWidth = parseFloat(b.getString(StateKeys.STYLE_STROKE_WIDTH), s.strokeWidth);
         s.strokeColor = parseInt(b.getString(StateKeys.STYLE_STROKE_COLOR), s.strokeColor);
         s.weight = parseInt(b.getString(StateKeys.STYLE_WEIGHT), s.weight);
@@ -161,7 +178,15 @@ public final class LyricStyle {
         s.landscape = "1".equals(b.getString(StateKeys.STYLE_LANDSCAPE));
         s.immersiveGrid = clampGrid(parseDecimal(b.getString(StateKeys.STYLE_IMMERSIVE_GRID),
                 StateKeys.IMMERSIVE_GRID_DEFAULT));
+        s.immersiveRot = clampRot(parseDecimal(b.getString(StateKeys.STYLE_IMMERSIVE_ROT),
+                StateKeys.IMMERSIVE_ROT_UNSET));
         return s;
+    }
+
+    /** 旋转档只接受 -1(未设置) 及 0..4，越界按未设置处理（再退回 landscape）。 */
+    static int clampRot(int raw) {
+        return raw >= StateKeys.IMMERSIVE_ROT_UNSET && raw <= StateKeys.IMMERSIVE_ROT_MAX
+                ? raw : StateKeys.IMMERSIVE_ROT_UNSET;
     }
 
     /** 沉浸模式只接受 0..2，越界一律当作关闭。 */
@@ -222,18 +247,20 @@ public final class LyricStyle {
         android.os.Bundle b = new android.os.Bundle();
         b.putString(StateKeys.STYLE_TEXT_SIZE, String.valueOf(textSizeSp));
         b.putString(StateKeys.STYLE_TEXT_COLOR, Integer.toHexString(textColor));
-        if (typefaceName != null) {
-            b.putString(StateKeys.STYLE_TYPEFACE, typefaceName);
-        }
+        // Always written for the same reason as the anchor id below: a missing
+        // key keeps the previous value in the provider snapshot.
+        b.putString(StateKeys.STYLE_TYPEFACE, typefaceName == null ? "" : typefaceName);
         b.putString(StateKeys.STYLE_STROKE_WIDTH, String.valueOf(strokeWidth));
         b.putString(StateKeys.STYLE_STROKE_COLOR, Integer.toHexString(strokeColor));
         b.putString(StateKeys.STYLE_WEIGHT, String.valueOf(weight));
         b.putString(StateKeys.STYLE_ITALIC, italic ? "1" : "0");
         b.putString(StateKeys.STYLE_OFFSET_RATIO, String.valueOf(offsetRatio));
         b.putString(StateKeys.STYLE_ALIGN, String.valueOf(align));
-        if (anchorId != null && !anchorId.isEmpty()) {
-            b.putString(StateKeys.STYLE_ANCHOR_ID, anchorId);
-        }
+        // ALWAYS written, even empty: the provider merges style keys with
+        // copyIfPresent, so omitting the key left the PREVIOUS anchor in the
+        // snapshot and the hook kept placing by anchor - the percentage slider
+        // (ratio mode) then did nothing at all.
+        b.putString(StateKeys.STYLE_ANCHOR_ID, anchorId == null ? "" : anchorId);
         b.putString(StateKeys.STYLE_ANCHOR_POS, String.valueOf(anchorPos));
         b.putString(StateKeys.STYLE_ANCHOR_GAP, String.valueOf(anchorGap));
         b.putString(StateKeys.STYLE_TREE_INSERT, treeInsert ? "1" : "0");
@@ -249,6 +276,7 @@ public final class LyricStyle {
         b.putString(StateKeys.STYLE_IMMERSIVE, String.valueOf(immersive));
         b.putString(StateKeys.STYLE_LANDSCAPE, landscape ? "1" : "0");
         b.putString(StateKeys.STYLE_IMMERSIVE_GRID, String.valueOf(immersiveGrid));
+        b.putString(StateKeys.STYLE_IMMERSIVE_ROT, String.valueOf(resolvedRotMode()));
         return b;
     }
 

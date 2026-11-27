@@ -105,10 +105,15 @@ data class StyleDraft(
     val pauseKeep: Boolean = true,
     /** 沉浸模式：0 关闭 / 1 纯黑 / 2 保留壁纸。 */
     val immersive: Int = 0,
-    /** true = 设备横放时把歌词转 90°。 */
+    /** true = 设备横放时把歌词转 90°（仅旧配置 / 自动档的兼容字段）。 */
     val landscape: Boolean = false,
     /** 沉浸模式九宫格位置：0..8 行优先，4 = 居中。 */
     val immersiveGrid: Int = 4,
+    /**
+     * 沉浸模式旋转方式：0 自动(重力) / 1 0° / 2 90° / 3 180° / 4 270°；
+     * -1 = 旧配置没存过，按 [landscape] 推断（UI 侧用 [resolvedRotMode]）。
+     */
+    val immersiveRot: Int = -1,
 )
 
 internal fun LyricStyle.toDraft() = StyleDraft(
@@ -136,7 +141,15 @@ internal fun LyricStyle.toDraft() = StyleDraft(
     immersive = immersive,
     landscape = landscape,
     immersiveGrid = immersiveGrid,
+    immersiveRot = immersiveRot,
 )
+
+/** 实际生效的旋转档：新配置原样，旧配置（-1）按 landscape 开关推断。 */
+internal fun StyleDraft.resolvedRotMode(): Int = when {
+    immersiveRot in 0..4 -> immersiveRot
+    landscape -> 0
+    else -> 1
+}
 
 internal fun StyleDraft.toLyricStyle() = LyricStyle().apply {
     textSizeSp = this@toLyricStyle.textSizeSp
@@ -163,6 +176,7 @@ internal fun StyleDraft.toLyricStyle() = LyricStyle().apply {
     immersive = this@toLyricStyle.immersive
     landscape = this@toLyricStyle.landscape
     immersiveGrid = this@toLyricStyle.immersiveGrid
+    immersiveRot = this@toLyricStyle.resolvedRotMode()
 }
 
 /** 粗粒度锚点（与 Hook 侧 ANCHOR_* 一致）：大时钟 / 图片 / 时间日期组件 / 通知。 */
@@ -511,7 +525,7 @@ private fun coarseAnchorName(id: String): String = when (coarseAnchorId(id) ?: i
     else -> stringResource(R.string.anchor_name_other)
 }
 
-/** 沉浸摘要：关闭 / 模式 · 九宫格位置（· 横屏）。 */
+/** 沉浸摘要：关闭 / 模式 · 九宫格位置 · 旋转方式。 */
 @Composable
 private fun immersiveSummary(d: StyleDraft): String {
     val mode = when (d.immersive) {
@@ -519,12 +533,25 @@ private fun immersiveSummary(d: StyleDraft): String {
         2 -> stringResource(R.string.style_immersive_wallpaper)
         else -> return stringResource(R.string.style_immersive_off)
     }
-    return if (d.landscape) {
-        stringResource(R.string.style_group_immersive_value_landscape, mode, gridLabel(d.immersiveGrid))
-    } else {
-        stringResource(R.string.style_group_immersive_value, mode, gridLabel(d.immersiveGrid))
-    }
+    return stringResource(
+        R.string.style_group_immersive_value_rot,
+        mode,
+        gridLabel(d.immersiveGrid),
+        rotationLabel(d.resolvedRotMode()),
+    )
 }
+
+/** 旋转方式短名（摘要用）。 */
+@Composable
+internal fun rotationLabel(mode: Int): String = stringResource(
+    when (mode) {
+        2 -> R.string.style_rot_90
+        3 -> R.string.style_rot_180
+        4 -> R.string.style_rot_270
+        0 -> R.string.style_rot_auto
+        else -> R.string.style_rot_none
+    },
+)
 
 /** 对齐方式的短名（摘要用，避免「居中（与组件一致）」撑长一行）。 */
 @Composable
@@ -608,6 +635,7 @@ private fun StyleDraft.toJson(): String = org.json.JSONObject().apply {
     put("immersive", immersive)
     put("landscape", landscape)
     put("immersiveGrid", immersiveGrid)
+    put("immersiveRot", resolvedRotMode())
 }.toString(2)
 
 private fun draftFromJson(raw: String): StyleDraft? = runCatching {
@@ -640,6 +668,7 @@ private fun draftFromJson(raw: String): StyleDraft? = runCatching {
         immersive = o.optInt("immersive", 0),
         landscape = o.optBoolean("landscape", false),
         immersiveGrid = o.optInt("immersiveGrid", 4).coerceIn(0, 8),
+        immersiveRot = o.optInt("immersiveRot", -1).let { if (it in 0..4) it else -1 },
     )
 }.getOrNull()
 

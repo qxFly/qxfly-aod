@@ -25,6 +25,11 @@ final class LyricStyleTest {
         T.eq("style default immersive", 0, s.immersive);
         T.ok("style default landscape off", !s.landscape);
         T.eq("style default immersive grid", 4, s.immersiveGrid);
+        // 旧配置没有旋转键：默认 -1，按 landscape 推断（默认关 -> 不旋转）。
+        T.eq("style default rot unset", -1, s.immersiveRot);
+        T.eq("legacy rot resolves to none", 1, s.resolvedRotMode());
+        s.landscape = true;
+        T.eq("legacy landscape resolves to auto", 0, s.resolvedRotMode());
     }
 
     private static void clamp() {
@@ -59,5 +64,16 @@ final class LyricStyleTest {
         LyricStyle st = new LyricStyle();
         st.strokeWidth = 6f;
         T.eq("resolved stroke clamps the field", 4f, st.resolvedStrokeDp());
+
+        // 旋转档：-1(未设置) 与 0..4 保留，越界回落为未设置。
+        T.eq("rot unset kept", -1, LyricStyle.clampRot(-1));
+        T.eq("rot auto kept", 0, LyricStyle.clampRot(0));
+        T.eq("rot 90 kept", 2, LyricStyle.clampRot(2));
+        T.eq("rot 270 kept", 4, LyricStyle.clampRot(4));
+        T.eq("rot below range unset", -1, LyricStyle.clampRot(-2));
+        T.eq("rot above range unset", -1, LyricStyle.clampRot(5));
+        LyricStyle sr = new LyricStyle();
+        sr.immersiveRot = 3;
+        T.eq("rot 180 resolves", 3, sr.resolvedRotMode());
     }
 }

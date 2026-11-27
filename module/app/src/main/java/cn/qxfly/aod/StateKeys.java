@@ -246,6 +246,23 @@ public final class StateKeys {
     public static final int IMMERSIVE_GRID_MAX = 8;
 
     /**
+     * 沉浸模式的旋转方式：0 = 自动（重力传感器），1 = 固定 0°（不转），
+     * 2 = 固定 90°，3 = 固定 180°，4 = 固定 270°（= -90°）。
+     * 缺键（旧配置）由 {@link LyricStyle} 记为 -1，按旧的
+     * {@link #STYLE_LANDSCAPE} 开关推断，保证老配置行为不变。
+     */
+    public static final String STYLE_IMMERSIVE_ROT = "styleImmersiveRot";
+    public static final int IMMERSIVE_ROT_AUTO = 0;
+    public static final int IMMERSIVE_ROT_NONE = 1;
+    public static final int IMMERSIVE_ROT_90 = 2;
+    public static final int IMMERSIVE_ROT_180 = 3;
+    public static final int IMMERSIVE_ROT_270 = 4;
+    public static final int IMMERSIVE_ROT_MIN = 0;
+    public static final int IMMERSIVE_ROT_MAX = 4;
+    /** 旧配置：没有这个键时的哨兵值（由 landscape 推断）。 */
+    public static final int IMMERSIVE_ROT_UNSET = -1;
+
+    /**
      * Live translation of the current line, pushed alongside {@link #LYRIC_LINE}.
      * Not a style key: it changes with every line.
      */
@@ -260,7 +277,7 @@ public final class StateKeys {
             STYLE_SHOW_TRANSLATION, STYLE_FONT_STAMP,
             STYLE_BG_ENABLED, STYLE_BG_COLOR, STYLE_BG_ALPHA, STYLE_BG_RADIUS,
             STYLE_SHOW_TRACK, STYLE_SHOW_NEXT, STYLE_SHOW_PROGRESS, STYLE_PAUSE_KEEP,
-            STYLE_IMMERSIVE, STYLE_LANDSCAPE, STYLE_IMMERSIVE_GRID,
+            STYLE_IMMERSIVE, STYLE_LANDSCAPE, STYLE_IMMERSIVE_GRID, STYLE_IMMERSIVE_ROT,
     };
 
     public static android.net.Uri stateUri() {

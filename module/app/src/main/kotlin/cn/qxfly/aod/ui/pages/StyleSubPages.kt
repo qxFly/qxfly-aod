@@ -585,11 +585,30 @@ internal fun StyleImmersivePage(bottomPadding: Dp) {
         )
 
         Spacer(Modifier.height(10.dp))
-        LabeledSwitchRow(
-            title = stringResource(R.string.style_landscape),
-            summary = stringResource(R.string.style_landscape_summary),
-            checked = draft.landscape,
-            onChange = { v -> StyleDraftStore.draft = draft.copy(landscape = v) },
+        Text(
+            text = stringResource(R.string.style_rot_title),
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+        )
+        OverlayDropdownPreference(
+            title = stringResource(R.string.style_rot_mode),
+            items = listOf(
+                stringResource(R.string.style_rot_auto),
+                stringResource(R.string.style_rot_none),
+                stringResource(R.string.style_rot_90),
+                stringResource(R.string.style_rot_180),
+                stringResource(R.string.style_rot_270),
+            ),
+            selectedIndex = draft.resolvedRotMode().coerceIn(0, 4),
+            onSelectedIndexChange = { index ->
+                StyleDraftStore.draft = StyleDraftStore.draft.copy(immersiveRot = index)
+            },
+        )
+        Text(
+            text = stringResource(R.string.style_rot_hint),
+            fontSize = 11.sp,
+            lineHeight = 16.sp,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
         )
     }
 }
